@@ -3,8 +3,8 @@ FYP_secondhalf/langgraph_app/src/backend/agents/analyst.py contains:
 - Analyst flow
 
 To test out the flow: 
-cd FYP_secondhalf/langgraph_app 
-langgraph dev
+- cd FYP_secondhalf/langgraph_app 
+- langgraph dev
 
 input example: 
 • ID: R1
