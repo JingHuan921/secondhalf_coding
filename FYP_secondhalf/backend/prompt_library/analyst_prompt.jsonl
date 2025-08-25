@@ -1,4 +1,0 @@
-{"name": "classify_user_reqs", "template": "You are tasked to categorize user
-requirements into functional and non-functional types and assigns priority levels using semantic labeling and classification
-heuristics.The user requirements input is as {}"}
-"}

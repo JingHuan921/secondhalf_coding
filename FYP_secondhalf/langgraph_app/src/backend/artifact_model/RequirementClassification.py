@@ -1,0 +1,16 @@
+from typing import Literal, List
+from enum import Enum
+from pydantic import BaseModel, Field 
+
+from .shared import *
+
+class RequirementClassification(BaseModel):
+    """Response to the user for each requirement"""
+    requirement_id: str
+    requirement_text: str
+    category: RequirementCategory
+    priority: RequirementPriority
+
+class RequirementsClassificationList(BaseModel): 
+    """Respond to the user with classification for all requirement items"""
+    req_class_id: List[RequirementClassification]
