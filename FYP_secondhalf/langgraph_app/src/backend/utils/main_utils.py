@@ -12,6 +12,9 @@ import tempfile
 import subprocess
 import asyncio
 
+from typing import Any, Dict, List, Union
+from pydantic import BaseModel
+import json
 
 async def generate_plantuml_local(uml_code, plantuml_jar_name="plantuml-1-2025-4.jar"):
     """Generate PlantUML diagram using local PlantUML installation (async-safe)"""
@@ -125,3 +128,54 @@ def extract_plantuml(text: str) -> str:
         raise ValueError("No PlantUML block found. Expected text to contain @startuml ... @enduml")
     
     return match.group(0)
+
+async def convert_pydantic_model_to_text(model: BaseModel, format_style: str = "readable") -> str:
+    """
+    Convert any Pydantic model to text using various formatting styles.
+    
+    Args:
+        model: Any Pydantic BaseModel instance
+        format_style: "readable", "json", "yaml", "compact", or "detailed"
+    
+    Returns:
+        Formatted text representation of the model
+    """
+    
+    if format_style == "json":
+        return model.model_dump_json(indent=2)
+    
+    elif format_style == "json_compact":
+        return model.model_dump_json()
+    
+    else:  # "readable" (default)
+        return _format_readable(model.model_dump())
+    
+
+async def pydantic_to_json_text(model: BaseModel, indent: int = 2) -> str:
+    """Convert Pydantic model to formatted JSON text"""
+    return model.model_dump_json(indent=indent)
+
+
+def _format_readable(data: Dict[str, Any], indent: int = 0) -> str:
+    """Format data in a human-readable bullet-point style"""
+    lines = []
+    indent_str = "  " * indent
+    
+    for key, value in data.items():
+        formatted_key = key.replace('_', ' ').title()
+        
+        if isinstance(value, dict):
+            lines.append(f"{indent_str}• {formatted_key}:")
+            lines.append(_format_readable(value, indent + 1))
+        elif isinstance(value, list):
+            lines.append(f"{indent_str}• {formatted_key}:")
+            for i, item in enumerate(value, 1):
+                if isinstance(item, dict):
+                    lines.append(f"{indent_str}  {i}.")
+                    lines.append(_format_readable(item, indent + 2))
+                else:
+                    lines.append(f"{indent_str}  {i}. {item}")
+        else:
+            lines.append(f"{indent_str}• {formatted_key}: {value}")
+    
+    return "\n".join(lines)

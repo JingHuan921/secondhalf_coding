@@ -1,9 +1,23 @@
+from typing import Any, Dict, List, Union, Optional, Annotated
+import os
+import json
+import asyncio
+from operator import add
+
 from backend.path_global_file import PROMPT_DIR_ANALYST
-from backend.utils.main_utils import load_prompts, generate_plantuml_local, extract_plantuml
+from backend.utils.main_utils import (
+    load_prompts, generate_plantuml_local, extract_plantuml, pydantic_to_json_text
+)
+from backend.graph_logic.test_state import (
+    AgentType, ArtifactType, ArtifactMetadata, Artifact, Conversation, AgentState, StateManager,
+    create_artifact, create_conversation, add_artifacts, add_conversations, 
+     _get_latest_version, _increment_version, _create_versioned_artifact
+)
 from backend.artifact_model import RequirementsClassificationList, SystemRequirementsList, RequirementsModel
 
+from pydantic import BaseModel
+
 from langchain_core.tools import tool 
-from langgraph.graph import MessagesState
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langgraph.prebuilt import ToolNode
@@ -12,7 +26,6 @@ from langgraph.prebuilt import ToolNode
 import os
 from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
-from typing import Optional, Union, List, Annotated
 from operator import add
 
 
@@ -29,95 +42,135 @@ prompt_path = PROMPT_DIR_ANALYST
 PROMPT_LIBRARY = load_prompts(prompt_path)
 
 
-
-def add_final_response(
-    existing: Optional[Union[
-        List[Union[RequirementsClassificationList, SystemRequirementsList, RequirementsModel]], 
-        RequirementsClassificationList, 
-        SystemRequirementsList, 
-        RequirementsModel
-    ]], 
-    new: Union[RequirementsClassificationList, SystemRequirementsList, RequirementsModel, List[Union[RequirementsClassificationList, SystemRequirementsList, RequirementsModel]]]
-) -> List[Union[RequirementsClassificationList, SystemRequirementsList, RequirementsModel]]:
-    """
-    Custom reducer function to add new responses to final_response list
-    """
-    # Handle case where existing is None
-    if existing is None:
-        existing_list = []
-    # Handle case where existing is a single object (convert to list)
-    elif isinstance(existing, (RequirementsClassificationList, SystemRequirementsList, RequirementsModel)):
-        existing_list = [existing]
-    # Handle case where existing is already a list
-    elif isinstance(existing, list):
-        existing_list = existing
-    else:
-        existing_list = []
-    
-    # Handle new value
-    if isinstance(new, list):
-        return existing_list + new
-    else:
-        return existing_list + [new]
-
-class AgentState(MessagesState):
-    # Final structured response from the agent with custom reducer
-    final_response: Annotated[
-        Optional[List[Union[RequirementsClassificationList, SystemRequirementsList, RequirementsModel]]], 
-        add_final_response
-    ] = None
-
-
-
 llm = init_chat_model("openai:gpt-4.1")
 
 
-# Define the function that calls the model
-def call_model(state: AgentState):
-    response = llm.invoke(state["messages"])
-    # We return a list, because this will get added to the existing list
-    return {"messages": [response]}
+# First node: Process user input and convert to conversation
+def process_user_input(state: AgentState) -> AgentState:
+    """
+    First node: Convert user input to conversation entry
+    This is the entry point that processes the user input from LangGraph Studio
+    """
+    try:
+        # Check if there's user input
+        if not state.input or state.input.strip() == "":
+            return {
+                "errors": ["No user input provided"],
+            }
+        
+        user_input = state.input.strip()
+        
+        # Create conversation entry for user input
+        user_conversation = create_conversation(
+            agent=AgentType.USER,
+            artifact_id=None,  # No artifact yet for user input
+            content=user_input,
+        )
+        
+        return {
+            "conversations": [user_conversation]
+        }
+        
+    except Exception as e:
+        return {
+            "errors": [f"Failed to process user input: {str(e)}"]
+        }
 
 
-async def classify_user_requirements (state: AgentState):
-    llm_with_structured_output = llm.with_structured_output(RequirementsClassificationList)
-    system_prompt = PROMPT_LIBRARY.get("classify_user_reqs")
+# Example usage in workflow nodes
+async def classify_user_requirements(state: AgentState) -> AgentState:
 
-    if not system_prompt:
-        raise ValueError("Missing 'classify_user_reqs' prompt in prompt library.")
+    try:
+        llm_with_structured_output = llm.with_structured_output(RequirementsClassificationList)
+        system_prompt = PROMPT_LIBRARY.get("classify_user_reqs")
+
+        if not system_prompt:
+            raise ValueError("Missing 'classify_user_reqs' prompt in prompt library.")
+        
+        
+        response = await llm_with_structured_output.ainvoke(
+        [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=state.conversations[-1].content)
+        ]
+        )
+        converted_text = await pydantic_to_json_text(response)
 
 
-    response = await llm_with_structured_output.ainvoke(
-    [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=state["messages"][-1].content)
-    ]
-    )
-    return {"final_response": response}
+        # Create artifact using factory function
+        artifact = create_artifact(
+            agent=AgentType.ANALYST,
+            artifact_type=ArtifactType.REQ_CLASS,
+            content=response,  
+        )
+        
+        # Create conversation entry
+        conversation = create_conversation(
+            agent=AgentType.ANALYST,
+            artifact_id=artifact.id,
+            content=converted_text
+        )
+        
+        return {
+            "artifacts": [artifact],  # Will be added via reducer
+            "conversations": [conversation],  # Will be added via reducer
+        }
+        
+    except Exception as e:
+        return {
+            "errors": [f"Classification failed: {str(e)}"]
+        }
 
-async def write_system_requirement (state: AgentState):
-    llm_with_structured_output = llm.with_structured_output(SystemRequirementsList)
-    system_prompt = PROMPT_LIBRARY.get("write_system_req")
+async def write_system_requirement (state: AgentState) -> AgentState:
 
-    if not system_prompt:
-        raise ValueError("Missing 'write_system_req' prompt in prompt library.")
+    try: 
+        llm_with_structured_output = llm.with_structured_output(SystemRequirementsList)
+        system_prompt = PROMPT_LIBRARY.get("write_system_req")
 
-    response = await llm_with_structured_output.ainvoke(
-    [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=state["messages"][-1].content)
-    ]
-    )
-    return {"final_response": response}
+        if not system_prompt:
+            raise ValueError("Missing 'write_system_req' prompt in prompt library.")
 
+        response = await llm_with_structured_output.ainvoke(
+        [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=state.conversations[-1].content)
+        ]
+        )
+        converted_text = await pydantic_to_json_text(response)
+
+        
+        # Create artifact using factory function
+        artifact = create_artifact(
+            agent=AgentType.ANALYST,
+            artifact_type=ArtifactType.SYSTEM_REQ,
+            content=response,  
+        )
+        
+        # Create conversation entry
+        conversation = create_conversation(
+            agent=AgentType.ANALYST,
+            artifact_id=artifact.id,
+            content=converted_text
+        )
+
+        return {
+            "artifacts": [artifact],  # Will be added via reducer
+            "conversations": [conversation],  # Will be added via reducer
+        }
+        
+    except Exception as e:
+        return {
+            "errors": [f"Classification failed: {str(e)}"]
+        }
+    
 async def generate_use_case_diagram(uml_code: str) -> str:
     """
     Generate a use case diagram from PlantUML code
-    
+
     Args:
         uml_code: The PlantUML code to generate diagram from
         output_location: Optional base directory for output (defaults to script parent directory)
-    
+
     Returns:
         Path to the generated diagram file or error message
     """
@@ -129,78 +182,102 @@ async def generate_use_case_diagram(uml_code: str) -> str:
             return "Failed to generate use case diagram. Check PlantUML installation and code syntax."
     except Exception as e:
         return f"Error generating diagram: {str(e)}"
-    
+        
 
-async def build_requirement_model(state: AgentState):
+async def build_requirement_model(state: AgentState) -> AgentState:
     """
     Build requirement model, extract UML, generate diagram, and return UML chunk
     """
-    system_prompt = PROMPT_LIBRARY.get("build_req_model")
+    try:
+        system_prompt = PROMPT_LIBRARY.get("build_req_model")
 
-    if not system_prompt:
-        raise ValueError("Missing 'build_req_model' prompt in prompt library.")
+        if not system_prompt:
+            raise ValueError("Missing 'build_req_model' prompt in prompt library.")
+        
+        # Get the LLM response
+        response = await llm.ainvoke([
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=state.conversations[-1].content)
+        ])
+        
+        # Extract PlantUML code from the response
+        uml_chunk = None
+        diagram_generation_message = "No PlantUML code found in response."
+        
+        if hasattr(response, 'content') and response.content:
+            try:
+                # Extract the UML chunk using your existing function
+                uml_chunk = extract_plantuml(response.content)
+                
+                # Generate the diagram using the tool
+                diagram_result = await generate_use_case_diagram(
+                    uml_code = uml_chunk
+                )
+                diagram_generation_message = diagram_result
+                
+            except ValueError:
+                # No PlantUML code found
+                uml_chunk = None
+                diagram_generation_message = "No PlantUML code found in the LLM response."
+            except Exception as e:
+                # Error during diagram generation
+                diagram_generation_message = f"Error generating diagram: {str(e)}"
+        
+        # Create final response - return the UML chunk if found, otherwise original response
+        if uml_chunk:
+            # Return just the UML chunk as the final response
+            final_response_content = uml_chunk
+            print(f"Diagram generation: {diagram_generation_message}")  # Log the diagram result
+        else:
+            # If no UML found, return the original response
+            final_response_content = response.content if hasattr(response, 'content') else str(response)
+            print(f"No UML extracted: {diagram_generation_message}")
+        
+        # Create artifact using factory function
+        artifact = create_artifact(
+            agent=AgentType.ANALYST,
+            artifact_type=ArtifactType.REQ_MODEL,
+            content=final_response_content,  
+        )
+        
+        # Create conversation entry
+        conversation = create_conversation(
+            agent=AgentType.ANALYST,
+            artifact_id=artifact.id,
+            content=final_response_content,
+        )
+
+        return {
+            "artifacts": [artifact],  
+            "conversations": [conversation],  
+        }
     
-    # Get the LLM response
-    response = await llm.ainvoke([
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=state["messages"][-1].content)
-    ])
+    except Exception as e:
+        return {
+            "errors": [f"Classification failed: {str(e)}"]
+        }
     
-    # Extract PlantUML code from the response
-    uml_chunk = None
-    diagram_generation_message = "No PlantUML code found in response."
-    
-    if hasattr(response, 'content') and response.content:
-        try:
-            # Extract the UML chunk using your existing function
-            uml_chunk = extract_plantuml(response.content)
-            
-            # Generate the diagram using the tool
-            diagram_result = await generate_use_case_diagram(
-                uml_code = uml_chunk
-            )
-            diagram_generation_message = diagram_result
-            
-        except ValueError:
-            # No PlantUML code found
-            uml_chunk = None
-            diagram_generation_message = "No PlantUML code found in the LLM response."
-        except Exception as e:
-            # Error during diagram generation
-            diagram_generation_message = f"Error generating diagram: {str(e)}"
-    
-    # Create final response - return the UML chunk if found, otherwise original response
-    if uml_chunk:
-        # Return just the UML chunk as the final response
-        final_response_content = uml_chunk
-        print(f"Diagram generation: {diagram_generation_message}")  # Log the diagram result
-    else:
-        # If no UML found, return the original response
-        final_response_content = response.content if hasattr(response, 'content') else str(response)
-        print(f"No UML extracted: {diagram_generation_message}")
-    
-    # Create AIMessage with the final content
-    final_response = AIMessage(content=final_response_content)
-    
-    return {"final_response": final_response}
 
 
 
 # Define a new graph
 workflow = StateGraph(AgentState)
-workflow.add_node("agent", call_model)
+workflow.add_node("process_user_input", process_user_input)
 workflow.add_node("classify_user_requirements", classify_user_requirements)
 workflow.add_node("write_system_requirement", write_system_requirement)
 workflow.add_node("build_requirement_model", build_requirement_model)
 
 
+
+
 # Set the entrypoint as `agent`
-workflow.set_entry_point("agent")
-workflow.add_edge("agent", "classify_user_requirements")
+workflow.set_entry_point("process_user_input")
+workflow.add_edge("process_user_input", "classify_user_requirements")
 workflow.add_edge("classify_user_requirements", "write_system_requirement")
 workflow.add_edge("write_system_requirement", "build_requirement_model")
 workflow.add_edge("build_requirement_model", END)
 graph = workflow.compile()
+
 
 if __name__ == "__main__":
     prompt = PROMPT_LIBRARY.get("classify_user_reqs")

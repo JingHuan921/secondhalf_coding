@@ -1,0 +1,15 @@
+# Virtual environment
+venv/
+
+#.env API
+langgraph_app/.env
+
+# Python cache
+__pycache__/
+*.pyc
+
+# OS files
+.DS_Store
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
