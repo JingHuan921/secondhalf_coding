@@ -30,7 +30,7 @@ try:
     
     # Method 1: Direct import from backend
     try:
-        from backend.agents.analyst import graph as analyst_graph
+        from backend.agents.test_sqlitesaver import graph as analyst_graph
         print("Method 1: Imported analyst graph via 'from backend.agents.analyst'")
     except ImportError as e1:
         print(f"Method 1 failed: {e1}")

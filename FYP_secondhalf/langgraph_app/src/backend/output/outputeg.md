@@ -1,4 +1,5 @@
-human
+# ------- User Requirements List -----------------------------------
+"
 • ID: R1
 ○ Name: Food Diary Feature
 ○ Description: Implement a food diary that allows users to log their meals, track
@@ -21,98 +22,167 @@ discussions.
 ○ Name: Integration with Food Delivery Services
 ○ Description: Integrate with major food delivery platforms like Uber Eats,
 Grubhub, and DoorDash to allow users to order food directly from the app.
-○ Priority: High
+○ Priority: High"
+# --------------------- Operating Environment List --------------------------------------------
+1. Device Compatibility
 
-Classify System Requirement 
-Functional
-High
-R1
-Users can log their meals, monitor dietary habits, and receive personalized insights. The diary must be able to import meal data seamlessly from supported food delivery services.
-Functional
-High
-R2
-Machine learning-driven recommendations for meals and restaurants. Takes into account user dietary preferences, past behaviors, and individual health targets.
-Functional
-High
-R4
-Direct integration with key delivery platforms (Uber Eats, Grubhub, DoorDash), allowing food ordering from within the app.
-Functional
-Medium
-R3
-In-app space for users to interact, share reviews and experiences, and participate in discussions about food and dining.
+Must support smartphones (iOS and Android) and optionally tablets.
+
+Minimum device specifications: e.g., Android 8.0+ or iOS 14+.
+
+Support both portrait and landscape orientations.
+
+2. Operating System
+
+Android devices: Android 8.0 and above.
+
+iOS devices: iOS 14 and above.
+
+Ensure compatibility with upcoming OS updates for at least 2 years.
+
+3. Network Requirements
+
+Must work on Wi-Fi and mobile data (3G/4G/5G).
+
+Minimum bandwidth requirement for loading menus and images.
+
+Offline mode: Allow browsing of previously loaded menus when offline.
+
+4. Backend and APIs
+
+App connects to a backend server via RESTful APIs or GraphQL.
+
+Requires secure HTTPS connections.
+
+Supports load balancing for at least 10,000 simultaneous users.
+
+5. Browser Requirements (if web-based)
+
+Support latest versions of Chrome, Safari, Firefox, and Edge.
+
+Graceful degradation for unsupported browsers.
+
+6. Storage and Memory
+
+Local caching for offline use and performance optimization.
+
+Minimum RAM usage constraints for smooth operation.
 
 
-Write System Requirement List 
-Functional
-High
-R4
-The system shall integrate directly with food delivery platforms, including Uber Eats, Grubhub, and DoorDash, allowing users to order food from within the app and to retrieve real-time restaurant and menu data.
-Functional
-High
-R1
-The system shall provide a food diary feature, enabling users to log their meals and import meal data seamlessly from integrated delivery services.
-Functional
-High
-R1
-The system shall monitor user dietary habits and generate personalized insights based on logged meal data.
-Functional
-High
-R2
-The system shall generate personalized meal and restaurant recommendations using machine learning, accounting for user dietary preferences, historical behaviors, and health targets.
-Functional
-Medium
-R3
-The system shall provide an in-app community platform where users can interact, share reviews, and participate in food- and dining-related discussions.
+# --------------------------------------------Classify System Requirement 
+content: |-
+        {
+          "req_class_id": [
+            {
+              "requirement_id": "R1",
+              "requirement_text": "Implement a food diary that allows users to log their meals, track dietary habits, and receive personalized insights. The diary should support integration with food delivery services to seamlessly import meal data.",
+              "category": "Functional",
+              "priority": "High"
+            },
+            {
+              "requirement_id": "R2",
+
+            },
+            {
+              "requirement_id": "R3",
+              "requirement_text": "Develop a community space within the app where users can share reviews and experiences, interact with other food enthusiasts, and engage in discussions.",
+              "category": "Functional",
+              "priority": "Medium"
+            },
+            {
+              "requirement_id": "R4",
+              "requirement_text": "Integrate with major food delivery platforms like Uber Eats, Grubhub, and DoorDash to allow users to order food directly from the app.",
+              "category": "Functional",
+              "priority": "High"
+            }
+          ]
+        }
+
+# ---------------------------------------------- Write System Requirement List 
+srl:
+          - requirement_id: R1
+            requirement_statement: The system shall provide a food diary that allows users to log meals, track dietary habits, and receive personalized insights, and shall support integration with food delivery services for seamless meal data import.
+            category: Functional
+            priority: High
+          - requirement_id: R2
+            priority: High
+          - requirement_id: R3
+            requirement_statement: The system shall provide a community space feature where users can share reviews, interact with other food enthusiasts, and participate in discussions.
+            category: Functional
+            priority: Medium
+          - requirement_id: R4
+            requirement_statement: The system shall integrate with major food delivery platforms, including Uber Eats, Grubhub, and DoorDash, to allow users to order food directly from the app.
+            category: Functional
+            priority: High
 
 
-Requirement Model 
+# ----------------------------------------------- Build Requirement Model 
 
 
-build_requirement_model
-ai
 @startuml
-' Actors definition
+' Actors
 actor User
-actor FoodDeliveryService as DeliveryService
+actor "Food Delivery Service" as FoodDeliveryService
 
-' System boundary definition
-rectangle "Food Recommendation System" {
-  ' Use case definitions
-  usecase "Log Meals in Food Diary" as UC_LogMeals
-  usecase "Import Meal Data from Delivery Service" as UC_ImportMeals
-  usecase "Receive Personalized Recommendations" as UC_GetRecommendations
-  usecase "Order Food via Delivery Service" as UC_OrderFood
-  usecase "Participate in Community Platform" as UC_Community
 
-  ' Include relationships
-  UC_LogMeals -[#0000FF,thickness=2]-> UC_ImportMeals : <<include>>
-  UC_OrderFood -[#0000FF,thickness=2]-> UC_ImportMeals : <<include>>
-  UC_GetRecommendations -[#0000FF,thickness=2]-> UC_LogMeals : <<include>>
+' System boundary for the Food Diary and Recommendation System
+rectangle "Food Diary & Recommendation System" {
 
-  ' Extend relationships
-  UC_GetRecommendations -[#00AA00,thickness=1,dashed]-> UC_Community : <<extend>>
+
+' Use cases related to food diary and meal tracking
+usecase "Log Meal" as UC_LogMeal
+usecase "Track Dietary Habits" as UC_TrackDiet
+usecase "Receive Personalized Insights" as UC_PersonalizedInsights
+usecase "Import Meal Data from Delivery Services" as UC_ImportMealData
+
+
+' Use cases related to recommendations
+usecase "Get Personalized Meal Recommendations" as UC_GetMealRec
+usecase "Get Restaurant Recommendations" as UC_GetRestRec
+
+
+' Community and social features
+usecase "Share Reviews" as UC_ShareReviews
+usecase "Interact with Food Community" as UC_InteractCommunity
+usecase "Participate in Discussions" as UC_ParticipateDiscussions
+
+
+' Food ordering and integration features
+usecase "Order Food via Delivery Service" as UC_OrderFood
+
+
 }
 
-' Associations
-User --> UC_LogMeals
-User --> UC_GetRecommendations
+
+' Associations between actors and use cases
+User --> UC_LogMeal
+User --> UC_TrackDiet
+User --> UC_PersonalizedInsights
+User --> UC_ImportMealData
+User --> UC_GetMealRec
+User --> UC_GetRestRec
+User --> UC_ShareReviews
+User --> UC_InteractCommunity
+User --> UC_ParticipateDiscussions
 User --> UC_OrderFood
-User --> UC_Community
 
-DeliveryService --> UC_ImportMeals
-DeliveryService --> UC_OrderFood
 
-' Non-functional requirements as notes
-note top of UC_ImportMeals
-  Non-functional: Must import meal data seamlessly
-end note
+' Integration with external food delivery service
+UC_ImportMealData <-- FoodDeliveryService
+UC_OrderFood --> FoodDeliveryService
 
-note top of UC_GetRecommendations
-  Non-functional: Powered by ML, must be personalized based on diary data
-end note
 
-note top of UC_Community
-  Non-functional: Medium priority; enriches engagement
-end note
+' Use case relationships for modularity
+UC_LogMeal --> UC_TrackDiet : <>
+UC_TrackDiet --> UC_PersonalizedInsights : <>
+UC_ShareReviews --> UC_InteractCommunity : <>
+UC_ParticipateDiscussions --> UC_InteractCommunity : <>
+
+
+' Notes for non-functional requirements (not present in this SRL, placeholder for future)
+' note right of rectangle "Food Diary & Recommendation System"
+'   Non-functional requirements (e.g., performance, scalability) can be specified here.
+' end note
+
 
 @enduml

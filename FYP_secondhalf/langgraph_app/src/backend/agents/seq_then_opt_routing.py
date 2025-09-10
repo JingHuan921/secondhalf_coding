@@ -1,6 +1,7 @@
 from typing import TypedDict, Literal
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import StateGraph, END
+from langchain.chat_models import init_chat_model
 
 llm = init_chat_model("openai:gpt-4.1")
 

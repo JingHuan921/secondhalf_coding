@@ -153,7 +153,11 @@ async def convert_pydantic_model_to_text(model: BaseModel, format_style: str = "
 
 async def pydantic_to_json_text(model: BaseModel, indent: int = 2) -> str:
     """Convert Pydantic model to formatted JSON text"""
-    return model.model_dump_json(indent=indent)
+    try: 
+        dumped_text = model.model_dump_json(indent=indent)
+    except Exception as e: 
+        print(f"Error with: {model}")
+    return dumped_text
 
 
 def _format_readable(data: Dict[str, Any], indent: int = 0) -> str:

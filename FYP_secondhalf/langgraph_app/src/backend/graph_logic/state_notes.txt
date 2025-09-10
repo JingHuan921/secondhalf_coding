@@ -1,0 +1,65 @@
+Artifact: 
+to add 
+- path_cached_at 
+- embedding id 
+
+ArtifactState: 
+
+
+
+ArtifactState: 
+    current_artifact: Optional[Artifact] = None
+    # conversations: Annotated[List[BaseMessage], add_messages] = Field(default_factory=list)
+    conversations: List[BaseMessage] = Field(default_factory=list)
+    human_request: Optional[str] = None  # ✅ remove Annotated
+    current_agent: Optional[str] = None  # ✅ remove Annotated
+    session_id: str = Field(default_factory=lambda: str(uuid4()))
+    thread_id: str = Field(default_factory=lambda: str(uuid4()))
+    approved_path: Optional[str] = None
+    rejected_path: Optional[str] = None
+    current_node: Optional[str] = None
+    requires_human_request: Optional[bool] = None
+    interrupt_data: Optional[Dict[str, Any]] = None
+    status: Optional[Literal["approved", "feedback"]] = None
+    assistant_response: Optional[str] = None
+    human_comment: Optional[str] = None
+
+Description: 
+    current_artifact: artifact
+    conversations: List[BaseMessage] = Field(default_factory=list)
+    human_request: initial project brief / requirement from user
+    current_agent: last modified by which agent
+    session_id: identify user session (for mongodb database and artifact storage)
+    thread_id: langgraph thread identifier (for workflow pauses and resumes, for SQLite checkpointer)
+    approved_path: (if approved artifact, which node to flow to next)
+    rejected_path: (if rejected artifact, which node to flow to next)
+    current_node: (which node is being executed)
+    requires_human_request: for HITL see if need human input
+    interrupt_data: store data when worfklow is interrupted
+    status: human decision on the current artifact (used by feedback_router to determine next step)
+    assistant_response: NOT USED
+    human_comment: user's feedback when rejecting an artifact
+
+I donid: 
+    - current_node
+    - assistant_response
+
+Not sure if needed: 
+    - interrupt_data **maybe can find a more elegant way to deal with this
+
+Others: 
+    - ADD or change name (same functionalities)
+
+For Artifact: 
+    ask junyang: 
+        - can I move created_by, version to metadata
+
+
+
+
+
+
+
+
+to-do list: 
+- check artifact: last modified by need use or not 
