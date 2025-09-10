@@ -55,11 +55,28 @@ For Artifact:
         - can I move created_by, version to metadata
 
 
+Ask JY: 
+ArtifactState [AgentState]
+1. why no reducer function for conversations-- suggest to add and sort by timestamp cos there might be bulk conversations loaded from database
+2. Also reducer function for artifacts -- i need to sort by timestamp (not that imp compared to conversation) 
+2. note to him (his current code does not save the conversations into MongoDB yet -- only artifacts are saved)
+3. current_agent I use Enum for AgentType
+4. Note to him: I add error for error message
 
-
-
+Artifact: 
+1. for id, it's a str with format: artifact type_agent_version 
+2. content_nature: no use right?
+3. Note to him: version -- I use float cos I need it for versioning (1.0, 1.1)
 
 
 
 to-do list: 
-- check artifact: last modified by need use or not 
+1. check artifact: last modified by need use or not 
+2. for artifacts, we need to change the data type when adding local storage (MongoDB) (also change to current_artifact)
+3. add session_id and thread_id later
+4. add approved and rejected path later
+5. add requires_human_request
+    interrupt_data
+    status
+    assistant_response (NO USE)
+    human_comment

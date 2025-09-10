@@ -9,7 +9,7 @@ from backend.utils.main_utils import (
     load_prompts, generate_plantuml_local, extract_plantuml, pydantic_to_json_text
 )
 from backend.graph_logic.state import (
-    AgentType, ArtifactType, ArtifactMetadata, Artifact, Conversation, AgentState, StateManager,
+    AgentType, ArtifactType, Artifact, Conversation, ArtifactState, StateManager,
     create_artifact, create_conversation, add_artifacts, add_conversations, 
      _get_latest_version, _increment_version, _create_versioned_artifact
 )
@@ -46,19 +46,19 @@ llm = init_chat_model("openai:gpt-4.1")
 
 
 # First node: Process user input and convert to conversation
-def process_user_input(state: AgentState) -> AgentState:
+def process_user_input(state: ArtifactState) -> ArtifactState:
     """
     First node: Convert user input to conversation entry
     This is the entry point that processes the user input from LangGraph Studio
     """
     try:
         # Check if there's user input
-        if not state.input or state.input.strip() == "":
+        if not state.human_request or state.human_request.strip() == "":
             return {
                 "errors": ["No user input provided"],
             }
         
-        user_input = state.input.strip()
+        user_input = state.human_request.strip()
         
         # Create conversation entry for user input
         user_conversation = create_conversation(
@@ -78,7 +78,7 @@ def process_user_input(state: AgentState) -> AgentState:
 
 
 # Example usage in workflow nodes
-async def classify_user_requirements(state: AgentState) -> AgentState:
+async def classify_user_requirements(state: ArtifactState) -> ArtifactState:
 
     try:
         llm_with_structured_output = llm.with_structured_output(RequirementsClassificationList)
@@ -121,7 +121,7 @@ async def classify_user_requirements(state: AgentState) -> AgentState:
             "errors": [f"Classification failed: {str(e)}"]
         }
 
-async def write_system_requirement (state: AgentState) -> AgentState:
+async def write_system_requirement (state: ArtifactState) -> ArtifactState:
 
     try: 
         llm_with_structured_output = llm.with_structured_output(SystemRequirementsList)
@@ -184,7 +184,7 @@ async def generate_use_case_diagram(uml_code: str) -> str:
         return f"Error generating diagram: {str(e)}"
         
 
-async def build_requirement_model(state: AgentState) -> AgentState:
+async def build_requirement_model(state: ArtifactState) -> ArtifactState:
     """
     Build requirement model, extract UML, generate diagram, and return UML chunk
     """
@@ -261,7 +261,7 @@ async def build_requirement_model(state: AgentState) -> AgentState:
 
 
 # Define a new graph
-workflow = StateGraph(AgentState)
+workflow = StateGraph(ArtifactState)
 workflow.add_node("process_user_input", process_user_input)
 workflow.add_node("classify_user_requirements", classify_user_requirements)
 workflow.add_node("write_system_requirement", write_system_requirement)

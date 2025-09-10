@@ -18,7 +18,7 @@ from backend.utils.main_utils import (
     load_prompts, generate_plantuml_local, extract_plantuml, pydantic_to_json_text
 )
 from backend.graph_logic.state import (
-    AgentType, ArtifactType, ArtifactMetadata, Artifact, Conversation, AgentState, StateManager,
+    AgentType, ArtifactType, Artifact, Conversation, ArtifactState, StateManager,
     create_artifact, create_conversation, add_artifacts, add_conversations, 
      _get_latest_version, _increment_version, _create_versioned_artifact
 )
@@ -59,7 +59,7 @@ llm = init_chat_model("openai:gpt-4.1")
 # 3. check output
 
 
-async def write_req_specs(state: AgentState) -> AgentState:
+async def write_req_specs(state: ArtifactState) -> ArtifactState:
 
     try:
         oel_input = """
@@ -152,7 +152,7 @@ async def write_req_specs(state: AgentState) -> AgentState:
         }
 
 
-async def verdict_to_revise_SRS(state: AgentState) -> str: 
+async def verdict_to_revise_SRS(state: ArtifactState) -> str: 
 
     latest_val_report = StateManager.get_latest_artifact_by_type(state, ArtifactType.VAL_REPORT)    
     # if we still do not have validation report generated yet 
@@ -196,7 +196,7 @@ async def verdict_to_revise_SRS(state: AgentState) -> str:
             print(f"Error in verdict_to_revise_SRS: {e}")
 
 
-async def revise_req_specs (state: AgentState) -> AgentState: 
+async def revise_req_specs (state: ArtifactState) -> ArtifactState: 
     # 1. retrieve the latest version of validation report
     latest_val_report = StateManager.get_latest_artifact_by_type(state, ArtifactType.VAL_REPORT)    
     # not found 
@@ -251,7 +251,7 @@ async def revise_req_specs (state: AgentState) -> AgentState:
                 "errors": [f"Classification failed: {str(e)}"]
             }
         
-workflow = StateGraph(AgentState)
+workflow = StateGraph(ArtifactState)
 workflow.add_node("write_req_specs", write_req_specs)
 workflow.add_node("verdict_to_revise_SRS", verdict_to_revise_SRS)
 workflow.add_node("revise_req_specs", revise_req_specs)

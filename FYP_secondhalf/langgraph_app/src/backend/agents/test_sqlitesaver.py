@@ -9,7 +9,7 @@ from backend.utils.main_utils import (
     load_prompts, generate_plantuml_local, extract_plantuml, pydantic_to_json_text
 )
 from backend.graph_logic.state import (
-    AgentType, ArtifactType, ArtifactMetadata, Artifact, Conversation, AgentState, StateManager,
+    AgentType, ArtifactType, Artifact, Conversation, ArtifactState, StateManager,
     create_artifact, create_conversation, add_artifacts, add_conversations, 
      _get_latest_version, _increment_version, _create_versioned_artifact
 )
@@ -66,7 +66,7 @@ def process_user_input(state):
     return {"user_input": user_input.strip()}
 
 # Example usage in workflow nodes
-async def classify_user_requirements(state: AgentState) -> AgentState:
+async def classify_user_requirements(state: ArtifactState) -> ArtifactState:
 
     try:
         llm_with_structured_output = llm.with_structured_output(RequirementsClassificationList)
@@ -109,7 +109,7 @@ async def classify_user_requirements(state: AgentState) -> AgentState:
             "errors": [f"Classification failed: {str(e)}"]
         }
 
-async def write_system_requirement (state: AgentState) -> AgentState:
+async def write_system_requirement (state: ArtifactState) -> ArtifactState:
 
     try: 
         llm_with_structured_output = llm.with_structured_output(SystemRequirementsList)
@@ -172,7 +172,7 @@ async def generate_use_case_diagram(uml_code: str) -> str:
         return f"Error generating diagram: {str(e)}"
         
 
-async def build_requirement_model(state: AgentState) -> AgentState:
+async def build_requirement_model(state: ArtifactState) -> ArtifactState:
     """
     Build requirement model, extract UML, generate diagram, and return UML chunk
     """
@@ -245,7 +245,7 @@ async def build_requirement_model(state: AgentState) -> AgentState:
             "errors": [f"Classification failed: {str(e)}"]
         }
     
-async def write_req_specs(state: AgentState) -> AgentState:
+async def write_req_specs(state: ArtifactState) -> ArtifactState:
 
     try:
         oel_input = """
@@ -337,7 +337,7 @@ async def write_req_specs(state: AgentState) -> AgentState:
             "errors": [f"Classification failed: {str(e)}"]
         }
 
-async def verdict_to_revise_SRS(state: AgentState) -> str: 
+async def verdict_to_revise_SRS(state: ArtifactState) -> str: 
     print("running this routing function")
     latest_val_report = StateManager.get_latest_artifact_by_type(state, ArtifactType.VAL_REPORT)    
     # if we still do not have validation report generated yet 
@@ -383,7 +383,7 @@ async def verdict_to_revise_SRS(state: AgentState) -> str:
             print(f"Error in verdict_to_revise_SRS: {e}")
 
 
-async def revise_req_specs(state: AgentState) -> AgentState: 
+async def revise_req_specs(state: ArtifactState) -> ArtifactState: 
     # 1. retrieve the latest version of validation report
     latest_val_report = StateManager.get_latest_artifact_by_type(state, ArtifactType.VAL_REPORT)    
     # not found 
@@ -441,7 +441,7 @@ async def revise_req_specs(state: AgentState) -> AgentState:
 async def main():
 
     # Define a new graph
-    workflow = StateGraph(AgentState)
+    workflow = StateGraph(ArtifactState)
     workflow.add_node("process_user_input", process_user_input)
     workflow.add_node("classify_user_requirements", classify_user_requirements)
     workflow.add_node("write_system_requirement", write_system_requirement)

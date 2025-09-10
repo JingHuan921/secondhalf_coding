@@ -29,20 +29,17 @@ class ArtifactType(str, Enum):
     VAL_REPORT = "validation_report"
 
 
-# Domain Models
-class ArtifactMetadata(BaseModel):
-    """Metadata for artifacts"""
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    version: str = "1.0"
-    last_modified_by: AgentType
-
 class Artifact(BaseModel):
     """Response artifact for each workflow step"""
     id: str
-    type: ArtifactType
-    agent: AgentType
     content: Optional[Union[RequirementsClassificationList, SystemRequirementsList, RequirementsModel, SoftwareRequirementSpecs, str]] = None
-    metadata: ArtifactMetadata
+    content_type: ArtifactType
+    content_nature: Optional[str] = None #no use, for the sake of integratig
+    created_by: AgentType
+    version: float = 1.0
+    #to add later
+
+    timestamp:datetime = Field(default_factory=datetime.utcnow)
 
 class Conversation(BaseModel):
     """Conversation entry linking agent responses to artifacts"""
@@ -69,7 +66,7 @@ def add_artifacts(existing: List[Artifact], new: List[Artifact]) -> List[Artifac
     
     for new_artifact in new:
         # Find existing artifacts of the same type
-        same_type_artifacts = [a for a in result if a.type == new_artifact.type]
+        same_type_artifacts = [a for a in result if a.content_type == new_artifact.content_type]
         
         if not same_type_artifacts:
             # No existing artifacts of this type - add as-is
@@ -84,7 +81,7 @@ def add_artifacts(existing: List[Artifact], new: List[Artifact]) -> List[Artifac
             result.append(updated_artifact)
     
     # Sort by type, then by version for consistent ordering
-    return sorted(result, key=lambda a: a.metadata.created_at)
+    return sorted(result, key=lambda a: a.timestamp)
 
 def _get_latest_version(artifacts: List[Artifact]) -> str:
     """
@@ -96,7 +93,7 @@ def _get_latest_version(artifacts: List[Artifact]) -> str:
     versions = []
     for artifact in artifacts:
         try:
-            version_str = artifact.metadata.version
+            version_str = str(artifact.version)
             # Parse version string (e.g., "1.0", "2.1", "1.10")
             major, minor = map(int, version_str.split('.'))
             versions.append((major, minor))
@@ -117,6 +114,7 @@ def _increment_version(version_str: str) -> str:
         return f"{major}.{minor + 1}"
     except (ValueError, AttributeError):
         # If parsing fails, return 1.1
+        print("Error: Couldn't increment version, likely couldn't parse or find the current version well")
         return "1.1"
 
 def _create_versioned_artifact(original_artifact: Artifact, new_version: str) -> Artifact:
@@ -124,20 +122,14 @@ def _create_versioned_artifact(original_artifact: Artifact, new_version: str) ->
     Create a new artifact with updated version and timestamp
     """
     # Create new metadata with updated version and timestamp
-    updated_metadata = ArtifactMetadata(
-        created_at=datetime.utcnow(),  # New timestamp
-        version=new_version,  # Updated version
-        last_modified_by = original_artifact.agent
-
-    )
+    
     
     # Create new artifact with updated metadata but same content
     return Artifact(
-        id=f"{original_artifact.type.value}_{original_artifact.agent.value}_v{new_version.replace('.', '-')}",  # Unique ID with version
-        type=original_artifact.type,
-        agent=original_artifact.agent,
+        id=f"{original_artifact.content_type.value}_{original_artifact.created_by.value}_v{new_version.replace('.', '-')}",  # Unique ID with version
+        content_type=original_artifact.content_type,
+        created_by=original_artifact.created_by,
         content=original_artifact.content,  # Same content, different version
-        metadata=updated_metadata
     )
 
 def add_conversations(existing: List[Conversation], new: List[Conversation]) -> List[Conversation]:
@@ -197,23 +189,24 @@ def update_error_log(existing: List[str], new: List[str]) -> List[str]:
     return existing + timestamped_errors
 
 
-# Main AgentState with custom reducers
-class AgentState(BaseModel):
+# Main ArtifactState with custom reducers
+class ArtifactState(BaseModel):
     """
     Main agent state for requirements processing workflow
     """
-    # for user input 
-    input: Optional[str] = None
-
     # Core workflow data with custom reducers
-    artifacts: Annotated[List[Artifact], add_artifacts] = Field(default_factory=list)
+    artifacts: Annotated[List[Artifact], add_artifacts] = Field(default_factory=list) 
     conversations: Annotated[List[Conversation], add_conversations] = Field(default_factory=list)
-    
+    # for user input 
+    human_request: Optional[str] = None
+    current_agent: AgentType
+    #to add 
+
+    current_node: Optional[str] = None
     # Error handling
     errors: Annotated[List[str], update_error_log] = Field(default_factory=list)
     
-    # Session info (no reducers - replacement behavior)
-    session_id: Optional[str] = None
+    # Session info (behavior)
     started_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -222,52 +215,52 @@ class StateManager:
     """Helper class for common state operations"""
     
     @staticmethod
-    def get_latest_artifact_by_type(state: AgentState, artifact_type: ArtifactType) -> Optional[Artifact]:
+    def get_latest_artifact_by_type(state: ArtifactState, artifact_type: ArtifactType) -> Optional[Artifact]:
         """Get the most recent artifact of a specific type (highest version)"""
-        matching = [a for a in state.artifacts if a.type == artifact_type]
+        matching = [a for a in state.artifacts if a.content_type == artifact_type]
         if not matching:
             return None
         
         # Sort by version to get the latest
-        return max(matching, key=lambda a: StateManager._parse_version(a.metadata.version))
+        return max(matching, key=lambda a: StateManager._parse_version(str(a.version)))
     
     @staticmethod
-    def get_artifact_by_id(state: AgentState, artifact_id: str) -> Optional[Artifact]:
+    def get_artifact_by_id(state: ArtifactState, artifact_id: str) -> Optional[Artifact]:
         """Get artifact by ID"""
         return next((a for a in state.artifacts if a.id == artifact_id), None)
     
     @staticmethod
-    def get_all_versions_by_type(state: AgentState, artifact_type: ArtifactType) -> List[Artifact]:
+    def get_all_versions_by_type(state: ArtifactState, artifact_type: ArtifactType) -> List[Artifact]:
         """Get all versions of artifacts of a specific type, sorted by version"""
-        matching = [a for a in state.artifacts if a.type == artifact_type]
-        return sorted(matching, key=lambda a: StateManager._parse_version(a.metadata.version))
+        matching = [a for a in state.artifacts if a.content_type == artifact_type]
+        return sorted(matching, key=lambda a: StateManager._parse_version(str(a.version)))
     
     @staticmethod
-    def get_conversations_by_artifact(state: AgentState, artifact_id: str) -> List[Conversation]:
+    def get_conversations_by_artifact(state: ArtifactState, artifact_id: str) -> List[Conversation]:
         """Get all conversations related to a specific artifact"""
         return [c for c in state.conversations if c.artifact_id == artifact_id]
     
     @staticmethod
-    def get_conversations_by_agent(state: AgentState, agent: AgentType) -> List[Conversation]:
+    def get_conversations_by_agent(state: ArtifactState, agent: AgentType) -> List[Conversation]:
         """Get all conversations from a specific agent"""
         return [c for c in state.conversations if c.agent == agent]
     
     @staticmethod
-    def has_artifact_type(state: AgentState, artifact_type: ArtifactType) -> bool:
+    def has_artifact_type(state: ArtifactState, artifact_type: ArtifactType) -> bool:
         """Check if state contains an artifact of specific type"""
-        return any(a.type == artifact_type for a in state.artifacts)
+        return any(a.content_type == artifact_type for a in state.artifacts)
     
     @staticmethod
-    def create_artifact_id(agent: AgentType, artifact_type: ArtifactType, metadata: ArtifactMetadata = None) -> str:
+    def create_artifact_id(agent: AgentType, artifact_type: ArtifactType) -> str:
         """Generate consistent artifact ID"""
         # Check if you're doing something like this:
-        # return f"{artifact_type.value}_{agent.value}_{metadata.version}"
+        # return f"{artifact_type.value}_{agent.value}_{version}"
         
         # Make sure agent and artifact_type are actually enum instances, not strings
         try:
             agent_value = agent.value if hasattr(agent, 'value') else str(agent)
             type_value = artifact_type.value if hasattr(artifact_type, 'value') else str(artifact_type)
-            return f"{type_value}_{agent_value}_{metadata.version}"
+            return f"{type_value}_{agent_value}_{version}"
         except AttributeError as e:
             logger.error(f"Error in create_artifact_id: agent={agent}, artifact_type={artifact_type}")
             raise
@@ -291,16 +284,12 @@ def create_artifact(
     """Factory function to create artifacts with proper metadata"""
     timestamp = datetime.utcnow()
 
-    metadata = ArtifactMetadata(
-        created_at=timestamp,
-        last_modified_by= agent,
-    )
-    artifact_id = StateManager.create_artifact_id(agent, artifact_type, metadata)
+    artifact_id = StateManager.create_artifact_id(agent, artifact_type)
     
     return Artifact(
         id=artifact_id,
-        type=artifact_type,
-        agent=agent,
+        content_type=artifact_type,
+        created_by=agent,
         content=content,
         metadata=metadata
     )
