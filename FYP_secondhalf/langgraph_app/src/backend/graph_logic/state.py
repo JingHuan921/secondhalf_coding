@@ -2,6 +2,7 @@ from typing import Annotated, List, Dict, Any, Optional, Union
 from pydantic import BaseModel, Field
 from datetime import datetime
 from enum import Enum
+from uuid import uuid4
 
 from backend.artifact_model import RequirementsClassificationList, SystemRequirementsList, RequirementsModel, SoftwareRequirementSpecs
 
@@ -36,10 +37,13 @@ class Artifact(BaseModel):
     content_type: ArtifactType
     content_nature: Optional[str] = None #no use, for the sake of integratig
     created_by: AgentType
-    version: float = 1.0
+    version: str = "1.0"
     #to add later
 
+    thread_id: str = Field(default_factory=lambda: str(uuid4()))
     timestamp:datetime = Field(default_factory=datetime.utcnow)
+    #for potential RAG 
+    embedding_id: Optional[str] = None 
 
 class Conversation(BaseModel):
     """Conversation entry linking agent responses to artifacts"""
@@ -88,7 +92,7 @@ def _get_latest_version(artifacts: List[Artifact]) -> str:
     Get the latest version number from a list of artifacts
     """
     if not artifacts:
-        return "1.0"
+        return ""
     
     versions = []
     for artifact in artifacts:
@@ -199,7 +203,7 @@ class ArtifactState(BaseModel):
     conversations: Annotated[List[Conversation], add_conversations] = Field(default_factory=list)
     # for user input 
     human_request: Optional[str] = None
-    current_agent: AgentType
+    current_agent: AgentType = None
     #to add 
 
     current_node: Optional[str] = None
@@ -251,12 +255,11 @@ class StateManager:
         return any(a.content_type == artifact_type for a in state.artifacts)
     
     @staticmethod
-    def create_artifact_id(agent: AgentType, artifact_type: ArtifactType) -> str:
+    def create_artifact_id(agent: AgentType, artifact_type: ArtifactType, version:str) -> str:
         """Generate consistent artifact ID"""
         # Check if you're doing something like this:
         # return f"{artifact_type.value}_{agent.value}_{version}"
         
-        # Make sure agent and artifact_type are actually enum instances, not strings
         try:
             agent_value = agent.value if hasattr(agent, 'value') else str(agent)
             type_value = artifact_type.value if hasattr(artifact_type, 'value') else str(artifact_type)
@@ -279,19 +282,19 @@ def create_artifact(
     agent: AgentType,
     artifact_type: ArtifactType,
     content: Optional[Union[RequirementsClassificationList, SystemRequirementsList, RequirementsModel, str]] = None,
+    version: str= "1.0"
 ) -> Artifact:
     
     """Factory function to create artifacts with proper metadata"""
     timestamp = datetime.utcnow()
 
-    artifact_id = StateManager.create_artifact_id(agent, artifact_type)
+    artifact_id = StateManager.create_artifact_id(agent, artifact_type, version=version)
     
     return Artifact(
         id=artifact_id,
         content_type=artifact_type,
         created_by=agent,
         content=content,
-        metadata=metadata
     )
 
 def create_conversation(

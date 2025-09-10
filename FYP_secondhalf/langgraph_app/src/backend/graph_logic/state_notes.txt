@@ -66,12 +66,12 @@ ArtifactState [AgentState]
 Artifact: 
 1. for id, it's a str with format: artifact type_agent_version 
 2. content_nature: no use right?
-3. Note to him: version -- I use float cos I need it for versioning (1.0, 1.1)
+3. Note to him: version -- I use string cos I need it for versioning (1.0, 1.1)
 
 
 
 to-do list: 
-1. check artifact: last modified by need use or not 
+1. is the conversations now ok? 
 2. for artifacts, we need to change the data type when adding local storage (MongoDB) (also change to current_artifact)
 3. add session_id and thread_id later
 4. add approved and rejected path later

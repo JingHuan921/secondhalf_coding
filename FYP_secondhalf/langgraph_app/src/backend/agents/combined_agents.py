@@ -63,7 +63,7 @@ def process_user_input(state: ArtifactState) -> ArtifactState:
             }
         
         user_input = state.human_request.strip()
-        
+        state.current_agent = AgentType.USER
         # Create conversation entry for user input
         user_conversation = create_conversation(
             agent=AgentType.USER,
@@ -477,6 +477,7 @@ workflow.add_edge("write_system_requirement", "build_requirement_model")
 workflow.add_edge("build_requirement_model", "write_req_specs")
 
 workflow.add_conditional_edges("write_req_specs", verdict_to_revise_SRS, {True: "revise_req_specs", False: END})
+workflow.add_edge("revise_req_specs", END)
 workflow.add_edge("write_req_specs", END)
 
 graph = workflow.compile()

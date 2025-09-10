@@ -13,3 +13,7 @@ __pycache__/
 
 # Jupyter checkpoints
 .ipynb_checkpoints/
+
+
+#langgraph cache ]
+.langgraph_api/
