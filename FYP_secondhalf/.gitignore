@@ -17,3 +17,11 @@ __pycache__/
 
 #langgraph cache ]
 .langgraph_api/
+
+.env
+.venv/
+.venvnew/
+langgraph_app/backend/outputs/
+langgraph_app/*.sqlite
+langgraph_app/*.db
+langgraph_app/backend/online
