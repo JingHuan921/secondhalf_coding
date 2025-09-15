@@ -1,10 +1,20 @@
-from typing import Annotated, List, Dict, Any, Optional, Union
+from typing import Annotated, List, Dict, Any, Optional, Union, Literal
 from pydantic import BaseModel, Field
 from datetime import datetime
 from enum import Enum
-from uuid import uuid4
+from uuid import UUID, uuid4
+from typing_extensions import TypedDict
 
-from backend.artifact_model import RequirementsClassificationList, SystemRequirementsList, RequirementsModel, SoftwareRequirementSpecs
+from langchain_core.messages import BaseMessage
+from langgraph.graph.message import add_messages
+from langgraph.graph import MessagesState
+
+from backend.artifact_model import (
+    RequirementsClassificationList,
+    SystemRequirementsList,
+    RequirementsModel,
+    SoftwareRequirementSpecs
+)
 
 class AgentType(Enum):
     DEPLOYER = "Deployer"
@@ -53,6 +63,50 @@ class Conversation(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 
+# User will input this to resume after interrupt
+class ResumeInput(BaseModel):
+    thread_id: str
+    choice: str
+
+class ContinueInput(BaseModel):
+    thread_id: str
+    message: str
+
+
+class ChatInput(BaseModel):
+    message: str
+
+
+class ThreadInput(BaseModel):
+    thread_id: str
+
+
+
+# ==========================================
+class StartRequest(BaseModel):
+    human_request: str
+
+class ResumeRequest(BaseModel):
+    thread_id: str
+    review_action: Literal["approved", "feedback"]
+    human_comment: Optional[str] = None
+
+
+# Run_status to indicate 
+class InitialInput(BaseModel):
+    thread_id: str
+    human_request: str
+
+
+class DraftReviewState(MessagesState):
+    human_request: str
+    human_comment: Optional[str]
+
+
+class GraphResponse(BaseModel):
+    thread_id: str
+    run_status: Literal["finished", "user_feedback", "pending"]
+    assistant_response: Optional[str] = None
 
 
 # Custom Reducer Functions

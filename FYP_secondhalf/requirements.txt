@@ -28,3 +28,4 @@ typing_extensions==4.14.0
 sse-starlette
 aiosqlite
 langgraph-checkpoint-sqlite
+
