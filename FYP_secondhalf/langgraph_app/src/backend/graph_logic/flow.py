@@ -6,6 +6,7 @@ import os
 import json
 import asyncio
 from operator import add
+import time
 
 from backend.path_global_file import PROMPT_DIR_ANALYST
 from backend.utils.main_utils import (
@@ -32,7 +33,7 @@ from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
 from operator import add
 
-import aiosqlite
+# import aiosqlite
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 
@@ -132,47 +133,82 @@ async def classify_user_requirements(state: ArtifactState) -> ArtifactState:
             "errors": [f"Classification failed: {str(e)}"]
         }
 
-async def write_system_requirement (state: ArtifactState) -> ArtifactState:
+async def write_system_requirement(state: ArtifactState) -> ArtifactState:
 
+       
     try: 
+        print(f"DEBUG: write_system_requirement - Step 1: Function started")
+        # Add this before the LLM call in write_system_requirement:
+        print(f"DEBUG: OpenAI API Key exists: {bool(os.environ.get('OPENAI_API_KEY'))}")
+        print(f"DEBUG: OpenAI API Key starts with: {os.environ.get('OPENAI_API_KEY', '')[:10]}...")
+        
+        print(f"DEBUG: write_system_requirement - Step 2: Checking conversations")
+        print(f"DEBUG: Conversations count: {len(state.conversations)}")
+        
+        print(f"DEBUG: write_system_requirement - Step 3: Getting conversation content length")
+        conversation_length = len(state.conversations[-1].content)
+        print(f"DEBUG: Last conversation content length: {conversation_length}")
+        
+        print(f"DEBUG: write_system_requirement - Step 4: Initializing LLM")
         llm_with_structured_output = llm.with_structured_output(SystemRequirementsList)
+        
+        print("DEBUG: Before ainvoke call")
         system_prompt = PROMPT_LIBRARY.get("write_system_req")
-
-        if not system_prompt:
-            raise ValueError("Missing 'write_system_req' prompt in prompt library.")
-
-        response = await llm_with_structured_output.ainvoke(
-        [
+        start = time.time()
+        coro = llm_with_structured_output.ainvoke([
             SystemMessage(content=system_prompt),
             HumanMessage(content=state.conversations[-1].content)
-        ]
-        )
-        converted_text = await pydantic_to_json_text(response)
+        ])
+        print("DEBUG: Got coroutine?", asyncio.iscoroutine(coro))
+        response = await asyncio.wait_for(coro, timeout=30.0)
+        print(f"DEBUG: After ainvoke call, took {time.time()-start:.2f}s")
+    except asyncio.TimeoutError:
+        print(f"ERROR: LLM call timed out after 30 seconds")
+        return {"errors": ["LLM call timed out"]}
+    except Exception as e:
+        print(f"ERROR: LLM call failed: {str(e)}")
+        return {"errors": [f"LLM call failed: {str(e)}"]}
 
-        
-        # Create artifact using factory function
-        artifact = create_artifact(
-            agent=AgentType.ANALYST,
-            artifact_type=ArtifactType.SYSTEM_REQ,
-            content=response,  
-        )
-        
-        # Create conversation entry
-        conversation = create_conversation(
-            agent=AgentType.ANALYST,
-            artifact_id=artifact.id,
-            content=converted_text
-        )
 
-        return {
-            "artifacts": [artifact],  # Will be added via reducer
-            "conversations": [conversation],  # Will be added via reducer
-        }
+        # print(f"DEBUG: write_system_requirement - Step 5: Getting system prompt")
+        # system_prompt = PROMPT_LIBRARY.get("write_system_req")
+        # if not system_prompt:
+        #     raise ValueError("Missing 'write_system_req' prompt in prompt library.")
+        
+        # print(f"DEBUG: write_system_requirement - Step 6: About to call LLM API")
+        # response = await llm_with_structured_output.ainvoke([
+        #     SystemMessage(content=system_prompt),
+        #     HumanMessage(content=state.conversations[-1].content)
+        # ])
+
+        # converted_text = await pydantic_to_json_text(response)
+        # print(f"DEBUG: write_system_requirement - Step 7: LLM API call completed")
+        
+        # # Create artifact using factory function
+        # artifact = create_artifact(
+        #     agent=AgentType.ANALYST,
+        #     artifact_type=ArtifactType.SYSTEM_REQ,
+        #     content=response,  
+        # )
+        
+        # # Create conversation entry
+        # conversation = create_conversation(
+        #     agent=AgentType.ANALYST,
+        #     artifact_id=artifact.id,
+        #     content=converted_text
+        # )
+
+        # return {
+        #     "artifacts": [artifact],  # Will be added via reducer
+        #     "conversations": [conversation],  # Will be added via reducer
+        # }
+    
         
     except Exception as e:
-        return {
-            "errors": [f"Classification failed: {str(e)}"]
-        }
+        print(f"ERROR: write_system_requirement failed at step: {str(e)}")
+        import traceback
+        print(f"ERROR: Full traceback: {traceback.format_exc()}")
+        return {"errors": [f"Classification failed: {str(e)}"]}
     
 async def generate_use_case_diagram(uml_code: str) -> str:
     """
@@ -186,11 +222,13 @@ async def generate_use_case_diagram(uml_code: str) -> str:
         Path to the generated diagram file or error message
     """
     try:
+        print(f"DEBUG: generate_use_case_diagram started")
         result = await generate_plantuml_local(uml_code=uml_code)  # <-- await here
         if result:
             return f"Use case diagram generated successfully at: {result}"
         else:
-            return "Failed to generate use case diagram. Check PlantUML installation and code syntax."
+            return f"Failed to generate use case diagram. Check PlantUML installation and code syntax."
+        
     except Exception as e:
         return f"Error generating diagram: {str(e)}"
         
@@ -214,7 +252,7 @@ async def build_requirement_model(state: ArtifactState) -> ArtifactState:
             raise ValueError("Missing 'build_req_model' prompt in prompt library.")
         
         print("DEBUG: Prompt loaded successfully, preparing LLM input")
-        print(f"DEBUG: Using conversation content: {state.conversations[-1].content[:100]}...")  # First 100 chars
+        print(f"DEBUG: Using conversation content: {state.conversations[-1].content}...")  # First 100 chars
         
         # Get the LLM response
         print("DEBUG: Invoking LLM for requirement model generation")
@@ -493,7 +531,7 @@ async def revise_req_specs(state: ArtifactState) -> ArtifactState:
             }
     
 
-async def setup_state_graph(conn: aiosqlite.Connection):
+async def setup_state_graph(checkpointer: AsyncSqliteSaver):
     # Define a new graph
     workflow = StateGraph(ArtifactState)
     workflow.add_node("process_user_input", process_user_input)
@@ -521,9 +559,8 @@ async def setup_state_graph(conn: aiosqlite.Connection):
 
     state_graph = workflow 
 
-    memory = AsyncSqliteSaver(conn)
     graph = state_graph.compile(
-        checkpointer=memory
+        checkpointer=checkpointer
     )
     shared_resources["graph"] = graph
 

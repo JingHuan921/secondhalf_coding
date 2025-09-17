@@ -1,7 +1,7 @@
 from pathlib import Path
 
 MOCK_LLM = False
-SQLITE_DB = r"C:\Users\jingh\OneDrive - Nanyang Technological University\SG NTU Curriculum\FYP\firsthalf_coding\FYP\backend\graph_logic\test_checkpoints.sqlite"
+SQLITE_DB = str(Path(__file__).parent / "checkpoints.sqlite")
 DEBUG_MODE = False
 
 BASE_DIR = Path(__file__).resolve().parent

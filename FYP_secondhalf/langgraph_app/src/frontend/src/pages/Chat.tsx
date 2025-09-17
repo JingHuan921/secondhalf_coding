@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
+import { sendUserPrompt, resumeStream, type ConversationState } from "../api/chat/routes";
 import {
   PromptInput,
   PromptInputButton,
@@ -20,7 +21,7 @@ import {
 } from "@/components/ai-elements/conversation";
 import { Message, MessageContent } from "@/components/ai-elements/message";
 import { Response } from "@/components/ai-elements/response";
-import { Button } from "@/components/ui/button"; // Import the Button component from Shadcn
+import { Button } from "@/components/ui/button";
 
 // Available models
 const models = [
@@ -28,234 +29,144 @@ const models = [
   { id: "claude-opus-4-20250514", name: "Claude 4 Opus" },
 ];
 
-// ---- BACKEND CALL: Create a thread ----
-async function createThread(prompt: string) {
-  const res = await fetch("http://localhost:8000/graph/stream/create", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      thread_id: "", // optional placeholder
-      human_request: prompt, // required by backend
-    }),
-  });
-  if (!res.ok) {
-    throw new Error(`Failed to create thread: ${res.statusText}`);
-  }
-
-  const data = await res.json();
-  console.log("Thread created:", data.thread_id);
-  console.log("Status:", data.run_status);
-  return data.thread_id;
-}
-
-// Start streaming chat output
-function startStreaming(
-  threadId: string | null,
-  setStatus: React.Dispatch<React.SetStateAction<string | null>>,
-  setApproveClicked: React.Dispatch<React.SetStateAction<boolean>>,
-  setFeedbackClicked: React.Dispatch<React.SetStateAction<boolean>>,
-  setMessages: React.Dispatch<
-    React.SetStateAction<{ role: "user" | "assistant"; text: string }[]>
-  >
-) {
-  const es = new EventSource(`http://localhost:8000/graph/stream/${threadId}`);
-  es.onmessage = (event) => {
-    console.log("Raw SSE:", event.data);
-    try {
-      const parsed = JSON.parse(event.data);
-      console.log("Parsed event:", parsed);
-
-      // Handle user feedback status change
-      if (parsed.status === "user_feedback") {
-        console.log(parsed.status);
-        setStatus("user_feedback");
-        setApproveClicked(false);
-        setFeedbackClicked(false);
-      }
-
-      // Handle the end of the process
-      if (parsed.status === "finished") {
-        console.log("Process finished!");
-        setStatus("finished");
-      }
-
-      // Handle assistant messages (conversation mode)
-      if (parsed.chat_type === "conversation" && parsed.content) {
-        const conversationMessage = {
-          role: "assistant", // Assuming assistant is sending the message
-          text: parsed.content,
-        };
-        setMessages((prev) => [
-          ...prev,
-          {
-            ...conversationMessage,
-            role: conversationMessage.role as "assistant",
-          },
-        ]);
-      }
-
-      // For any other content, you can log or handle accordingly
-      if (parsed.content) {
-        console.log("Document content:", parsed.content);
-      }
-    } catch (e) {
-      console.error("Error parsing SSE data:", e);
-    }
-  };
-
-  es.onerror = (err) => {
-    console.error("Streaming error:", err);
-    es.close();
-  };
-}
-
 const InputDemo = () => {
-  const [text, setText] = useState<string>("");
+  // UI-specific state
+  const [inputText, setInputText] = useState<string>("");
   const [model, setModel] = useState<string>(models[0].id);
+  const [feedbackText, setFeedbackText] = useState<string>("");
+  const [showFeedbackInput, setShowFeedbackInput] = useState<boolean>(false);
+  
+  // Chat history (separate from streaming state)
   const [messages, setMessages] = useState<
-    { role: "user" | "assistant"; text: string }[]
-  >([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [threadId, setThreadId] = useState<string | null>(null);
-  const [status, setStatus] = useState<string | null>(null); // Manage the status state
-  const [approveClicked, setApproveClicked] = useState(false); // Track if 'Approve' is clicked
-  const [feedbackClicked, setFeedbackClicked] = useState(false); // Track if 'Feedback' is clicked
-  const [feedbackText, setFeedbackText] = useState<string>(""); // Track feedback input text
+  { role: "user" | "assistant"; text: string; agent?: string }[]
+>([]);
+
+  
+  // Current conversation state from routes.ts
+  const [conversationState, setConversationState] = useState<ConversationState | null>(null);
+
+  // Handle state updates from routes.ts
+  const handleStateUpdate = (newState: ConversationState) => {
+    setConversationState(newState);
+    
+    // If we have a complete message, add it to chat history
+    if (newState.currentMessage && (newState.isComplete || newState.requiresFeedback)) {
+      setMessages(prev => {
+        const lastMessage = prev[prev.length - 1];
+        if (!lastMessage || lastMessage.text !== newState.currentMessage) {
+          return [
+            ...prev, 
+            { 
+              role: "assistant", 
+              text: newState.currentMessage, 
+              agent: newState.currentAgent // 👈 add this
+            }
+          ];
+        }
+        return prev;
+      });
+}
+
+  };
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault(); // Prevent page refresh
-    if (!text.trim()) return;
+    e.preventDefault();
+    if (!inputText.trim()) return;
 
-    // Adding user message to the conversation
-    const userMessage = { role: "user" as const, text };
-    setMessages((prev) => [...prev, userMessage]);
+    // Add user message to chat history
+    const userMessage = { role: "user" as const, text: inputText };
+    setMessages(prev => [...prev, userMessage]);
+
+    // Clear input
+    const currentInput = inputText;
+    setInputText("");
 
     try {
-      setIsLoading(true);
-
-      // Step 1: Create thread
-      const id = await createThread(text);
-      setThreadId(id);
-
-      // Step 2: Start streaming assistant messages
-      startStreaming(
-        id,
-        setStatus,
-        setApproveClicked,
-        setFeedbackClicked,
-        setMessages
-      ); // Pass setMessages to update conversation
-    } catch (err) {
-      console.error("Error:", err);
-    } finally {
-      setIsLoading(false);
+      // Use routes.ts to handle the API communication
+      await sendUserPrompt(currentInput, handleStateUpdate);
+    } catch (error) {
+      console.error("Error sending prompt:", error);
+      // Handle error state - could show error message in UI
     }
-
-    setText(""); // Clear the text input after submission
   };
 
   const handleApprove = async () => {
-    console.log("Approved!");
-
-    // Call the backend to resume the graph streaming with 'approved' action
+    if (!conversationState?.threadId) return;
+    
     try {
-      const response = await fetch(
-        "http://localhost:8000/graph/stream/resume",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            thread_id: threadId,
-            review_action: "approved", // Pass the 'approved' review action
-            human_comment: "User has approved the feedback.", // You can customize this message as needed
-          }),
-        }
+      await resumeStream(
+        conversationState.threadId,
+        "approved",
+        handleStateUpdate,
+        "User has approved the feedback."
       );
-
-      if (!response.ok) {
-        throw new Error("Failed to send approval");
-      }
-
-      const data = await response.json();
-      console.log("Approval sent:", data);
-      setApproveClicked(true); // Set approveClicked to true to hide the button
-
-      startStreaming(
-        threadId,
-        setStatus,
-        setApproveClicked,
-        setFeedbackClicked,
-        setMessages // Pass the setMessages to continue streaming conversation
-      );
-    } catch (err) {
-      console.error("Error during approval:", err);
+    } catch (error) {
+      console.error("Error approving:", error);
     }
   };
 
-  const handleFeedback = async (e: React.MouseEvent<HTMLButtonElement>) => {
-    e.preventDefault();
-    setFeedbackClicked(true);
-    if (!feedbackText.trim()) {
-      console.log("Feedback is empty!");
-      return; // Do nothing if feedback is empty
-    }
-
-    console.log("Feedback provided!");
+  const handleFeedback = async () => {
+    if (!conversationState?.threadId || !feedbackText.trim()) return;
 
     try {
-      const response = await fetch(
-        "http://localhost:8000/graph/stream/resume",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            thread_id: threadId,
-            review_action: "feedback", // Pass the 'feedback' review action
-            human_comment: feedbackText, // Pass the user-entered feedback
-          }),
-        }
+      await resumeStream(
+        conversationState.threadId,
+        "feedback", 
+        handleStateUpdate,
+        feedbackText
       );
-
-      if (!response.ok) {
-        throw new Error("Failed to send feedback");
-      }
-
-      const data = await response.json();
-      console.log("Feedback sent:", data);
-
-      setFeedbackClicked(true); // Set feedbackClicked to true to hide the button
-
-      // Clear the feedback input after submission
-      setFeedbackText("");
-
-      // After feedback is successfully sent, start streaming again
-      startStreaming(
-        threadId,
-        setStatus,
-        setApproveClicked,
-        setFeedbackClicked,
-        setMessages
-      );
-    } catch (err) {
-      console.error("Error during feedback:", err);
+      setFeedbackText(""); // Clear feedback text
+      setShowFeedbackInput(false); // Hide feedback input
+    } catch (error) {
+      console.error("Error sending feedback:", error);
     }
   };
+
+  // Determine what UI state to show
+  const showFeedbackButtons = conversationState?.requiresFeedback && !conversationState.isComplete;
+  const isLoading = conversationState?.isStreaming || false;
 
   return (
     <div className="fixed left-10 top-10 right-10 w-full sm:w-1/2 rounded-lg border h-[90vh] py-6 px-4 flex flex-col">
       <div className="flex-grow overflow-y-auto">
         <Conversation>
           <ConversationContent>
+            {/* Show completed messages */}
             {messages.map((message, idx) => (
               <Message from={message.role} key={idx}>
                 <MessageContent>
+                  <div className="font-bold text-sm text-gray-600">
+                    {message.role === "user" ? "You" : message.agent || "Assistant"}
+                  </div>
                   <Response>{message.text}</Response>
                 </MessageContent>
               </Message>
             ))}
-            {threadId && (
+            
+            {/* Show current streaming message */}
+            {conversationState?.isStreaming && conversationState.currentMessage && (
+              <Message from="assistant">
+                <MessageContent>
+                  <div className="font-bold text-sm text-gray-600">
+                    {conversationState.currentAgent || "Assistant"}
+                  </div>
+                  <Response>{conversationState.currentMessage}</Response>
+                </MessageContent>
+              </Message>
+            )}
+
+            
+            {/* Show thread ID for debugging */}
+            {conversationState?.threadId && (
               <div className="mt-2 text-sm text-gray-500">
-                Thread ID: {threadId}
+                Thread ID: {conversationState.threadId}
+              </div>
+            )}
+
+            {/* Show error if any */}
+            {conversationState?.error && (
+              <div className="mt-2 text-sm text-red-500">
+                Error: {conversationState.error}
               </div>
             )}
           </ConversationContent>
@@ -263,40 +174,63 @@ const InputDemo = () => {
         </Conversation>
       </div>
 
-      {/* Conditionally render the buttons or chat input based on status */}
-      {status === "user_feedback" && !approveClicked && !feedbackClicked ? (
-        <div className="mt-auto flex justify-center items-center">
-          <div className="bg-grey-100 rounded-lg p-6 w-full flex justify-center max-w-sm sm:max-w-md lg:max-w-lg">
-            <div className="text-center">
-              <p className="mb-4 text-xl">
-                Do you approve the provided feedback?
-              </p>
-              <Button onClick={handleApprove} className="mr-4">
-                Approve
-              </Button>
-              <Button onClick={handleFeedback}>Feedback</Button>
-            </div>
-          </div>
-        </div>
-      ) : feedbackClicked ? (
+      {/* Conditional UI based on conversation state */}
+      {showFeedbackButtons ? (
         <div className="mt-auto">
-          <PromptInput onSubmit={handleFeedback}>
-            <PromptInputTextarea
-              onChange={(e) => setFeedbackText(e.target.value)}
-              value={feedbackText}
-              placeholder="Enter your feedback"
-              className="w-full py-2 px-4 border rounded-md"
-            />
-            <PromptInputSubmit disabled={!feedbackText || isLoading} />
-          </PromptInput>
+          {!showFeedbackInput ? (
+            // Show approve/feedback buttons
+            <div className="flex justify-center items-center">
+              <div className="bg-grey-100 rounded-lg p-6 w-full flex justify-center max-w-sm sm:max-w-md lg:max-w-lg">
+                <div className="text-center">
+                  <p className="mb-4 text-xl">
+                    Do you approve the provided feedback?
+                  </p>
+                  <Button onClick={handleApprove} className="mr-4">
+                    Approve
+                  </Button>
+                  <Button onClick={() => setShowFeedbackInput(true)}>
+                    Provide Feedback
+                  </Button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            // Show feedback input
+            <div>
+              <PromptInput>
+                <PromptInputTextarea
+                  onChange={(e) => setFeedbackText(e.target.value)}
+                  value={feedbackText}
+                  placeholder="Enter your feedback"
+                  className="w-full py-2 px-4 border rounded-md"
+                />
+              </PromptInput>
+              <div className="flex gap-2 mt-2">
+                <Button onClick={handleFeedback} disabled={!feedbackText.trim()}>
+                  Send Feedback
+                </Button>
+                <Button 
+                  variant="outline" 
+                  onClick={() => {
+                    setShowFeedbackInput(false);
+                    setFeedbackText("");
+                  }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       ) : (
+        // Show normal chat input
         <div className="mt-auto">
           <PromptInput onSubmit={handleSubmit}>
             <PromptInputTextarea
-              onChange={(e) => setText(e.target.value)}
-              value={text}
+              onChange={(e) => setInputText(e.target.value)}
+              value={inputText}
               className="w-full py-2 px-4 border rounded-md"
+              disabled={isLoading}
             />
             <PromptInputToolbar>
               <PromptInputTools>
@@ -323,7 +257,7 @@ const InputDemo = () => {
                   </PromptInputModelSelectContent>
                 </PromptInputModelSelect>
               </PromptInputTools>
-              <PromptInputSubmit disabled={!text || isLoading} />
+              <PromptInputSubmit disabled={!inputText.trim() || isLoading} />
             </PromptInputToolbar>
           </PromptInput>
         </div>
