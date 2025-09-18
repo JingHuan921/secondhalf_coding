@@ -30,7 +30,7 @@ try:
     
     # Method 1: Direct import from backend
     try:
-        from backend.agents.combined_agents import graph as analyst_graph
+        from backend.graph_logic.flow_dev import graph as analyst_graph
         print("Method 1: Imported analyst graph via 'from backend.agents.analyst'")
     except ImportError as e1:
         print(f"Method 1 failed: {e1}")
