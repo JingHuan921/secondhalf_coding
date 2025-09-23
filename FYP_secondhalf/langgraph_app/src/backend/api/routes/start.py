@@ -2,14 +2,16 @@ import sys
 import os
 import asyncio
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
-from fastapi import APIRouter, HTTPException, Request, Body, Depends
+from backend.core.startup import shared_resources  # This is the key import
+from fastapi import APIRouter, HTTPException, Request, Body
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Optional
 from uuid import uuid4
 from backend.graph_logic.state import ArtifactState, ResumeInput, ChatInput, ContinueInput, ThreadInput, Artifact, InitialInput, ResumeRequest, GraphResponse
 from backend.utils.main_utils import load_prompts
-from backend.utils.dependencies import get_graph
+# Remove this import since we're not using the dependency anymore
+# from backend.utils.dependencies import get_graph
 from backend.path_global_file import OUTPUT_DIR
 from langgraph.graph import StateGraph, Graph
 from langgraph.types import Command
@@ -32,10 +34,49 @@ run_configs = {}
 async def root():
     return {"message": "KGMAF API is running", "docs": "/docs"}
 
+# Add health check to verify graph is available
+@router.get("/health")
+def health_check():
+    """Check if all services are available"""
+    
+    health_status = {
+        "status": "healthy",
+        "services": {
+            "graph": shared_resources.get('graph') is not None,
+            "checkpointer": shared_resources.get('checkpointer') is not None,
+            "db_connection": shared_resources.get('db_connection') is not None,
+        },
+        "shared_resources_count": len(shared_resources)
+    }
+    
+    # If any service is down, return 503
+    if not all(health_status["services"].values()):
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unhealthy",
+                "services": health_status["services"],
+                "message": "Some services are not available"
+            }
+        )
+    
+    return health_status
+
 @router.post("/graph/stream/create", response_model=GraphResponse)
 def create_graph_streaming(request: InitialInput):
     print(f"DEBUG: Successfully received validated request: {request}")
     print(f"DEBUG: human_request: {request.human_request}")
+    
+    # Check if graph is available before creating thread
+    if 'graph' not in shared_resources or shared_resources['graph'] is None:
+        print("ERROR: Graph not initialized or not available")
+        raise HTTPException(
+            status_code=503, 
+            detail="The graph application is not available or has not been initialized."
+        )
+    
+    print(f"DEBUG: Graph is available: {shared_resources['graph'] is not None}")
     
     thread_id = str(uuid4())
     
@@ -59,6 +100,13 @@ def create_graph_streaming(request: InitialInput):
 @router.post("/graph/stream/resume", response_model=GraphResponse)
 def resume_graph_streaming(request: ResumeRequest):
     thread_id = request.thread_id
+    
+    # Check if graph is available
+    if 'graph' not in shared_resources or shared_resources['graph'] is None:
+        raise HTTPException(
+            status_code=503, 
+            detail="The graph application is not available or has not been initialized."
+        )
     
     print(f"DEBUG: Resuming graph for thread_id={thread_id}")
     run_configs[thread_id] = {
@@ -86,10 +134,21 @@ node_to_agent_map = {
     "revise_req_specs": "Archivist"
 }
 
+# FIXED: Remove Depends(get_graph) and access graph from shared_resources
 @router.get("/graph/stream/{thread_id}")
-async def stream_graph(request: Request, thread_id: str, graph: CompiledGraph = Depends(get_graph)):
+async def stream_graph(request: Request, thread_id: str):
+    # Get graph from shared_resources instead of dependency injection
+    if 'graph' not in shared_resources or shared_resources['graph'] is None:
+        raise HTTPException(
+            status_code=503, 
+            detail="The graph application is not available or has not been initialized."
+        )
+    
+    graph = shared_resources['graph']
+    print(f"DEBUG: Using graph from shared_resources: {graph is not None}")
+
     if thread_id not in run_configs:
-        return {"error": "Thread ID not found. You must first call /graph/stream/create or /graph/stream/resume"}
+        raise HTTPException(status_code=404, detail="Thread not found")
     
     run_data = run_configs[thread_id]
     config = {"configurable": {"thread_id": thread_id}}
@@ -160,7 +219,6 @@ async def stream_graph(request: Request, thread_id: str, graph: CompiledGraph = 
                             "agent": "Assistant"
                         })
                         yield error_payload
-
 
             # Not sure if this works for feedback nodes yet
             final_state = await graph.aget_state(config)

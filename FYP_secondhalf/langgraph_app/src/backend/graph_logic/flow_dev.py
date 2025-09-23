@@ -7,13 +7,58 @@ import json
 import asyncio
 from operator import add
 import time
-
 import logging
+import sys
 
-logging.basicConfig(level=logging.DEBUG)
+def setup_minimal_logging():
+    """Setup minimal logging - suppress all LangGraph server noise"""
+    
+    # Configure basic logging first
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler('app.log', mode='w')
+        ],
+        force=True
+    )
+    
+    # === SUPPRESS ALL LANGGRAPH SERVER LOGS ===
+    logging.getLogger("langgraph_api").setLevel(logging.CRITICAL)
+    logging.getLogger("langgraph_api.graph").setLevel(logging.CRITICAL)
+    logging.getLogger("langgraph_runtime_inmem").setLevel(logging.CRITICAL)
+    logging.getLogger("langgraph_runtime_inmem.queue").setLevel(logging.CRITICAL)
+    logging.getLogger("langgraph.runtime").setLevel(logging.CRITICAL)
+    logging.getLogger("langgraph.server").setLevel(logging.CRITICAL)
+    
+    # === SUPPRESS FILE WATCHER LOGS ===
+    logging.getLogger("watchfiles").setLevel(logging.CRITICAL)
+    logging.getLogger("watchfiles.main").setLevel(logging.CRITICAL)
+    
+    # === SUPPRESS OTHER NOISY SERVICES ===
+    logging.getLogger("httpcore").setLevel(logging.CRITICAL)
+    logging.getLogger("httpx").setLevel(logging.CRITICAL)
+    logging.getLogger("urllib3").setLevel(logging.CRITICAL)
+    logging.getLogger("uvicorn").setLevel(logging.CRITICAL)
+    logging.getLogger("fastapi").setLevel(logging.CRITICAL)
+    
+    # === KEEP ONLY YOUR APPLICATION LOGS ===
+    logging.getLogger("backend").setLevel(logging.DEBUG)  # Your app
+    logging.getLogger("__main__").setLevel(logging.DEBUG)  # Main script
+    
+    # LangGraph core functionality (not server) - keep important messages only
+    logging.getLogger("langgraph").setLevel(logging.WARNING)
+    logging.getLogger("langchain").setLevel(logging.WARNING)
 
-logging.debug("DEBUG: This will show up in langgraph dev logs")
-logging.info("INFO: Something is happening")
+setup_minimal_logging()
+# Get your application logger
+logger = logging.getLogger(__name__)
+
+# Import langgraph AFTER setting up logging and environment variables
+from langgraph.graph import StateGraph, END
+from langgraph.constants import Send
+from langgraph.types import Command
 
 
 
@@ -195,7 +240,7 @@ async def generate_use_case_diagram(uml_code: str) -> str:
         Path to the generated diagram file or error message
     """
     try:
-        logging.debug(f"DEBUG: generate_use_case_diagram started")
+        logger.debug(f"DEBUG: generate_use_case_diagram started")
         result = await generate_plantuml_local(uml_code=uml_code)  # <-- await here
         if result:
             return f"Use case diagram generated successfully at: {result}"
@@ -206,67 +251,67 @@ async def generate_use_case_diagram(uml_code: str) -> str:
         return f"Error generating diagram: {str(e)}"
         
 async def build_requirement_model(state: ArtifactState) -> ArtifactState:
-    logging.debug("DEBUG: build_requirement_model function started")
+    logger.debug("DEBUG: build_requirement_model function started")
     
     
     try:
-        logging.debug("DEBUG: Attempting to load 'build_req_model' prompt from library")
+        logger.debug("DEBUG: Attempting to load 'build_req_model' prompt from library")
         system_prompt = PROMPT_LIBRARY.get("build_req_model")
 
         if not system_prompt:
-            logging.debug("ERROR: Missing 'build_req_model' prompt in prompt library")
+            logger.debug("ERROR: Missing 'build_req_model' prompt in prompt library")
             raise ValueError("Missing 'build_req_model' prompt in prompt library.")
         # Get the LLM response
-        logging.debug("DEBUG: Invoking LLM for requirement model generation")
+        logger.debug("DEBUG: Invoking LLM for requirement model generation")
         response = await llm.ainvoke([
             SystemMessage(content=system_prompt),
             HumanMessage(content=state.conversations[-1].content)
         ])
-        logging.debug("DEBUG: LLM response received successfully")
+        logger.debug("DEBUG: LLM response received successfully")
         
         # Extract PlantUML code from the response
         uml_chunk = None
         diagram_generation_message = "No PlantUML code found in response."
         
         if hasattr(response, 'content') and response.content:
-            logging.debug("DEBUG: LLM response has content, attempting UML extraction")
+            logger.debug("DEBUG: LLM response has content, attempting UML extraction")
             try:
                 # Extract the UML chunk using your existing function
-                logging.debug("DEBUG: Calling extract_plantuml function")
+                logger.debug("DEBUG: Calling extract_plantuml function")
                 uml_chunk = extract_plantuml(response.content)
-                logging.debug(f"DEBUG: UML extraction successful, chunk length: {len(uml_chunk)}")
+                logger.debug(f"DEBUG: UML extraction successful, chunk length: {len(uml_chunk)}")
                 
                 # Generate the diagram using the tool
-                logging.debug("DEBUG: Attempting to generate use case diagram")
+                logger.debug("DEBUG: Attempting to generate use case diagram")
                 diagram_result = await generate_use_case_diagram(
                     uml_code = uml_chunk
                 )
                 diagram_generation_message = diagram_result
-                logging.debug(f"DEBUG: Diagram generation completed: {diagram_generation_message}")
+                logger.debug(f"DEBUG: Diagram generation completed: {diagram_generation_message}")
                 
             except ValueError as ve:
                 # No PlantUML code found
-                logging.debug(f"DEBUG: ValueError during UML extraction: {ve}")
+                logger.debug(f"DEBUG: ValueError during UML extraction: {ve}")
                 uml_chunk = None
                 diagram_generation_message = "No PlantUML code found in the LLM response."
             except Exception as e:
                 # Error during diagram generation
-                logging.debug(f"DEBUG: Exception during UML processing: {str(e)}")
+                logger.debug(f"DEBUG: Exception during UML processing: {str(e)}")
                 diagram_generation_message = f"Error generating diagram: {str(e)}"
         else:
-            logging.debug("DEBUG: LLM response has no content or content attribute missing")
+            logger.debug("DEBUG: LLM response has no content or content attribute missing")
         
         # Create final response - return the UML chunk if found, otherwise original response
         if uml_chunk:
-            logging.debug("DEBUG: Using UML chunk as final response content")
+            logger.debug("DEBUG: Using UML chunk as final response content")
             final_response_content = uml_chunk
-            logging.debug(f"DEBUG: Diagram generation result: {diagram_generation_message}")
+            logger.debug(f"DEBUG: Diagram generation result: {diagram_generation_message}")
         else:
-            logging.debug("DEBUG: No UML found, using original LLM response as final content")
+            logger.debug("DEBUG: No UML found, using original LLM response as final content")
             final_response_content = response.content if hasattr(response, 'content') else str(response)
-            logging.debug(f"DEBUG: No UML extracted: {diagram_generation_message}")
+            logger.debug(f"DEBUG: No UML extracted: {diagram_generation_message}")
         
-        logging.debug("DEBUG: Creating artifact and conversation objects")
+        logger.debug("DEBUG: Creating artifact and conversation objects")
         
         # Create artifact using factory function
         artifact = create_artifact(
@@ -274,7 +319,7 @@ async def build_requirement_model(state: ArtifactState) -> ArtifactState:
             artifact_type=ArtifactType.REQ_MODEL,
             content=final_response_content,  
         )
-        logging.debug(f"DEBUG: Artifact created with ID: {artifact.id}")
+        logger.debug(f"DEBUG: Artifact created with ID: {artifact.id}")
         
         # Create conversation entry
         conversation = create_conversation(
@@ -282,25 +327,25 @@ async def build_requirement_model(state: ArtifactState) -> ArtifactState:
             artifact_id=artifact.id,
             content=final_response_content,
         )
-        logging.debug(f"DEBUG: Conversation entry created for artifact: {artifact.id}")
+        logger.debug(f"DEBUG: Conversation entry created for artifact: {artifact.id}")
 
-        logging.debug("DEBUG: build_requirement_model function completed successfully")
+        logger.debug("DEBUG: build_requirement_model function completed successfully")
         return {
             "artifacts": [artifact],  
             "conversations": [conversation],  
         }
     
     except Exception as e:
-        logging.debug(f"ERROR: Exception in build_requirement_model: {str(e)}")
-        logging.debug(f"ERROR: Exception type: {type(e).__name__}")
+        logger.debug(f"ERROR: Exception in build_requirement_model: {str(e)}")
+        logger.debug(f"ERROR: Exception type: {type(e).__name__}")
         import traceback
-        logging.debug(f"ERROR: Traceback: {traceback.format_exc()}")
+        logger.debug(f"ERROR: Traceback: {traceback.format_exc()}")
         return {
             "errors": [f"Requirement model generation failed: {str(e)}"]
         }
     
 async def write_req_specs(state: ArtifactState) -> ArtifactState:
-    print(f"DEBUG: Runnign write_req_specs")
+    logger.debug(f"DEBUG: Runnign write_req_specs")
     try:
         oel_input = """
         1. Device Compatibility
@@ -338,11 +383,11 @@ async def write_req_specs(state: ArtifactState) -> ArtifactState:
         latest_system_req = StateManager.get_latest_artifact_by_type(state, ArtifactType.SYSTEM_REQ)
         latest_req_model = StateManager.get_latest_artifact_by_type(state, ArtifactType.REQ_MODEL)
 
-        print(f"DEBUG: Check for content of latest_system_req: {latest_system_req}")
+        logger.debug(f"DEBUG: Check for content of latest_system_req: {latest_system_req}")
         system_req_content = await pydantic_to_json_text(latest_system_req.content)
-        print(f"DEBUG: Check for content of latest_req_model: {latest_req_model}")
+        logger.debug(f"DEBUG: Check for content of latest_req_model: {latest_req_model}")
         req_model_content = latest_req_model.content
-        print(f"DEBUG: Check for content of oel_artifact: {oel_artifact}")
+        logger.debug(f"DEBUG: Check for content of oel_artifact: {oel_artifact}")
         op_env_list_content = oel_artifact.content
 
         system_req_id = latest_system_req.id
@@ -395,11 +440,11 @@ async def write_req_specs(state: ArtifactState) -> ArtifactState:
         }
 
 async def verdict_to_revise_SRS(state: ArtifactState) -> str: 
-    print("running this routing function")
+    logger.debug("running this routing function")
     latest_val_report = StateManager.get_latest_artifact_by_type(state, ArtifactType.VAL_REPORT)    
     # if we still do not have validation report generated yet 
     if not latest_val_report: 
-        print("True")
+        logger.debug("True")
         return True
     else:
         try: 
@@ -428,16 +473,16 @@ async def verdict_to_revise_SRS(state: ArtifactState) -> str:
 
             # if we need changes (after looking at validation report) 
             if response.strip().upper() == "YES": 
-                print("True")
+                logger.debug("True")
                 return True
             
             elif response.strip().upper() == "NO": 
-                print("False")
+                logger.debug("False")
                 return False 
             else: 
                 raise Exception (f"LLM does not return True or False to revise SRS, it returns {response}")
         except Exception as e: 
-            print(f"Error in verdict_to_revise_SRS: {e}")
+            logger.debug(f"Error in verdict_to_revise_SRS: {e}")
 
 
 async def revise_req_specs(state: ArtifactState) -> ArtifactState: 
@@ -494,29 +539,69 @@ async def revise_req_specs(state: ArtifactState) -> ArtifactState:
             return{
                 "errors": [f"Classification failed: {str(e)}"]
             }
-    
+
+
+async def handle_routing_decision(state: ArtifactState) -> ArtifactState:
+    """
+    Dummy rerouting node for LangGraph Studio.
+    Instead of asking user, just hardcode reroute to 'build_requirement_model'.
+    """
+    print("--- Handling routing decision ---")
+    state.next_routing_node = "build_requirement_model"
+    return state
+
+
+def execute_routing_decision(state: ArtifactState) -> str:
+    """Return the chosen node (dummy: always build_requirement_model)."""
+    return state.next_routing_node
+
+
+"""Create workflow with enhanced logging"""
+logger.info("Creating LangGraph workflow...")
 
 workflow = StateGraph(ArtifactState)
+
+# Add nodes with logging
+logger.debug("Adding workflow nodes...")
 workflow.add_node("process_user_input", process_user_input)
 workflow.add_node("classify_user_requirements", classify_user_requirements)
 workflow.add_node("write_system_requirement", write_system_requirement)
 workflow.add_node("build_requirement_model", build_requirement_model)
 workflow.add_node("write_req_specs", write_req_specs)
-
 workflow.add_node("verdict_to_revise_SRS", verdict_to_revise_SRS)
 workflow.add_node("revise_req_specs", revise_req_specs)
 
 
+workflow.add_node("handle_routing_decision", handle_routing_decision)
 
-# Set the entrypoint as `agent`
+# Set entry point and edges with logging
+logger.debug("Setting entry point and edges...")
 workflow.set_entry_point("process_user_input")
 workflow.add_edge("process_user_input", "classify_user_requirements")
 workflow.add_edge("classify_user_requirements", "write_system_requirement")
 workflow.add_edge("write_system_requirement", "build_requirement_model")
 workflow.add_edge("build_requirement_model", "write_req_specs")
 
-workflow.add_conditional_edges("write_req_specs", verdict_to_revise_SRS, {True: "revise_req_specs", False: END})
-workflow.add_edge("revise_req_specs", END)
-workflow.add_edge("write_req_specs", END)
+workflow.add_conditional_edges(
+    "write_req_specs", 
+    verdict_to_revise_SRS, 
+    {True: "revise_req_specs", False: END}
+)
+workflow.add_edge("revise_req_specs", "handle_routing_decision")
 
-graph = workflow.compile()
+workflow.add_conditional_edges(
+        "handle_routing_decision",
+        execute_routing_decision,
+        {
+            "classify_user_requirements": "classify_user_requirements",
+            "write_system_requirement": "write_system_requirement",
+            "build_requirement_model": "build_requirement_model",
+            "write_req_specs": "write_req_specs",
+            "revise_req_specs": "revise_req_specs",
+        }
+    )
+
+graph = workflow.compile(interrupt_before=["handle_routing_decision"])
+
+# graph = workflow.compile()
+

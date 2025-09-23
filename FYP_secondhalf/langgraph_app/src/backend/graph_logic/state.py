@@ -191,15 +191,20 @@ def _create_versioned_artifact(original_artifact: Artifact, new_version: str) ->
     )
 
 def add_conversations(existing: List[Conversation], new: List[Conversation]) -> List[Conversation]:
-    """
-    Add new conversations chronologically
-    """
     if not new:
         return existing
-    
-    # Combine and sort by timestamp
-    all_conversations = existing + new
-    return sorted(all_conversations, key=lambda c: c.timestamp)
+
+    combined = existing + new
+    seen = set()
+    unique = []
+    for c in combined:
+        key = (c.artifact_id, c.timestamp)
+        if key not in seen:
+            seen.add(key)
+            unique.append(c)
+
+    return sorted(unique, key=lambda c: c.timestamp)
+
 
 def update_context(existing: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -261,6 +266,7 @@ class ArtifactState(BaseModel):
     #to add 
 
     current_node: Optional[str] = None
+    next_routing_node: Optional[str] = None
     # Error handling
     errors: Annotated[List[str], update_error_log] = Field(default_factory=list)
     

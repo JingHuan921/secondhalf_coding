@@ -29,6 +29,13 @@ const models = [
   { id: "claude-opus-4-20250514", name: "Claude 4 Opus" },
 ];
 
+
+//1. add a complete message to chat history
+//2. let user inputs feedback text and appends the text for "user" role 
+//3. handles user approval of feedback 
+//4. renders the messages from langgraph
+//5. displays error and thread id
+
 const InputDemo = () => {
   // UI-specific state
   const [inputText, setInputText] = useState<string>("");
@@ -59,7 +66,7 @@ const InputDemo = () => {
             { 
               role: "assistant", 
               text: newState.currentMessage, 
-              agent: newState.currentAgent // 👈 add this
+              agent: newState.currentAgent
             }
           ];
         }
@@ -69,6 +76,7 @@ const InputDemo = () => {
 
   };
 
+  // User enters and submit the chat input text
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!inputText.trim()) return;
@@ -174,64 +182,64 @@ const InputDemo = () => {
         </Conversation>
       </div>
 
-      {/* Conditional UI based on conversation state */}
-      {showFeedbackButtons ? (
-        <div className="mt-auto">
-          {!showFeedbackInput ? (
-            // Show approve/feedback buttons
-            <div className="flex justify-center items-center">
-              <div className="bg-grey-100 rounded-lg p-6 w-full flex justify-center max-w-sm sm:max-w-md lg:max-w-lg">
-                <div className="text-center">
-                  <p className="mb-4 text-xl">
-                    Do you approve the provided feedback?
-                  </p>
-                  <Button onClick={handleApprove} className="mr-4">
-                    Approve
+        {/* Conditional UI based on conversation state */}
+        {showFeedbackButtons ? (
+          <div className="mt-auto">
+            {!showFeedbackInput ? (
+              // Show approve/feedback buttons
+              <div className="flex justify-center items-center">
+                <div className="bg-grey-100 rounded-lg p-6 w-full flex justify-center max-w-sm sm:max-w-md lg:max-w-lg">
+                  <div className="text-center">
+                    <p className="mb-4 text-xl">
+                      Do you approve the provided feedback?
+                    </p>
+                    <Button onClick={handleApprove} className="mr-4">
+                      Approve
+                    </Button>
+                    <Button onClick={() => setShowFeedbackInput(true)}>
+                      Provide Feedback
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              // Show feedback input
+              <div>
+                <PromptInput>
+                  <PromptInputTextarea
+                    onChange={(e) => setFeedbackText(e.target.value)}
+                    value={feedbackText}
+                    placeholder="Enter your feedback"
+                    className="w-full py-2 px-4 border rounded-md"
+                  />
+                </PromptInput>
+                <div className="flex gap-2 mt-2">
+                  <Button onClick={handleFeedback} disabled={!feedbackText.trim()}>
+                    Send Feedback
                   </Button>
-                  <Button onClick={() => setShowFeedbackInput(true)}>
-                    Provide Feedback
+                  <Button 
+                    variant="outline" 
+                    onClick={() => {
+                      setShowFeedbackInput(false);
+                      setFeedbackText("");
+                    }}
+                  >
+                    Cancel
                   </Button>
                 </div>
               </div>
-            </div>
-          ) : (
-            // Show feedback input
-            <div>
-              <PromptInput>
-                <PromptInputTextarea
-                  onChange={(e) => setFeedbackText(e.target.value)}
-                  value={feedbackText}
-                  placeholder="Enter your feedback"
-                  className="w-full py-2 px-4 border rounded-md"
-                />
-              </PromptInput>
-              <div className="flex gap-2 mt-2">
-                <Button onClick={handleFeedback} disabled={!feedbackText.trim()}>
-                  Send Feedback
-                </Button>
-                <Button 
-                  variant="outline" 
-                  onClick={() => {
-                    setShowFeedbackInput(false);
-                    setFeedbackText("");
-                  }}
-                >
-                  Cancel
-                </Button>
-              </div>
-            </div>
-          )}
-        </div>
-      ) : (
-        // Show normal chat input
-        <div className="mt-auto">
-          <PromptInput onSubmit={handleSubmit}>
-            <PromptInputTextarea
-              onChange={(e) => setInputText(e.target.value)}
-              value={inputText}
-              className="w-full py-2 px-4 border rounded-md"
-              disabled={isLoading}
-            />
+            )}
+          </div>
+        ) : (
+          // Show normal chat input
+          <div className="mt-auto">
+            <PromptInput onSubmit={handleSubmit}>
+              <PromptInputTextarea
+                onChange={(e) => setInputText(e.target.value)}
+                value={inputText}
+                className="w-full py-2 px-4 border rounded-md"
+                disabled={isLoading}
+              />
             <PromptInputToolbar>
               <PromptInputTools>
                 <PromptInputButton>

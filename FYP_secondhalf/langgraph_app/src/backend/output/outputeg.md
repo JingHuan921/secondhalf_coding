@@ -195,3 +195,7 @@ UC_ParticipateDiscussions --> UC_InteractCommunity : <>
 
 
 @enduml
+
+
+# -------------------metadata ------------------
+{"created_by":"system","graph_id":"agent","assistant_id":"fe096781-5601-53d2-b2f6-0d3403f7e9ca","from_studio":true,"LANGGRAPH_API_URL":"http://127.0.0.1:2024","run_attempt":1,"langgraph_version":"0.4.8","langgraph_api_version":"0.2.68","langgraph_plan":"developer","langgraph_host":"self-hosted","langgraph_api_url":"http://127.0.0.1:2024","thread_id":"674747ab-9664-46bf-bbe5-10c61a7c5538","x-auth-scheme":"langsmith","user-agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 Edg/140.0.0.0","x-request-id":"159cdf57-9d00-4dd5-b444-c1c1c0f2e21e","langgraph_auth_user_id":"","langgraph_request_id":"159cdf57-9d00-4dd5-b444-c1c1c0f2e21e","run_id":"1f0946d1-0825-69c7-9afd-bb2b2442df74","user_id":"","langgraph_step":5,"langgraph_node":"write_req_specs","langgraph_triggers":["branch:to:write_req_specs"],"langgraph_path":["__pregel_pull","write_req_specs"],"langgraph_checkpoint_ns":"write_req_specs:c77adafa-b1f2-48d5-a68e-052bc6d2fff5","LANGSMITH_LANGGRAPH_API_VARIANT":"local_dev","LANGSMITH_PROJECT":"new-agent","ls_run_depth":1}

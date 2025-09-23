@@ -44,6 +44,7 @@ interface ConversationState {
   artifacts: ArtifactInfo[];
 }
 
+// Enhanced version of your sendUserPrompt function
 async function sendUserPrompt(prompt: string, onStateUpdate: (state: ConversationState) => void) {
   try {
     console.log("Sending prompt:", prompt);
@@ -51,7 +52,10 @@ async function sendUserPrompt(prompt: string, onStateUpdate: (state: Conversatio
     // Step 1: Create a new stream
     const createRes = await fetch("http://localhost:8000/graph/stream/create", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { 
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+      },
       body: JSON.stringify({
         thread_id: "",
         human_request: prompt,
@@ -59,6 +63,7 @@ async function sendUserPrompt(prompt: string, onStateUpdate: (state: Conversatio
     });
 
     console.log("Create response status:", createRes.status);
+    console.log("Create response headers:", Object.fromEntries(createRes.headers.entries()));
 
     if (!createRes.ok) {
       let errorMessage = `Server error: ${createRes.status} ${createRes.statusText}`;
@@ -105,6 +110,11 @@ async function sendUserPrompt(prompt: string, onStateUpdate: (state: Conversatio
   } catch (error) {
     console.error("Error in sendUserPrompt:", error);
     
+    // Check if it's a CORS error
+    if (error instanceof TypeError && error.message.includes('Failed to fetch')) {
+      console.error("Likely CORS issue - check backend CORS configuration");
+    }
+    
     // Update state with error
     const errorState: ConversationState = {
       currentMessage: "",
@@ -120,6 +130,9 @@ async function sendUserPrompt(prompt: string, onStateUpdate: (state: Conversatio
     onStateUpdate(errorState);
   }
 }
+
+//1. intialize event resource from graph/stream/thread_id 
+
 
 function streamAssistantResponse(
   threadId: string, 
@@ -140,6 +153,8 @@ function streamAssistantResponse(
     error: null,
     artifacts: []
   };
+
+  //This is to update ConversationState .. defined in this script 
 
   const updateState = (updates: Partial<ConversationState>) => {
     currentState = { ...currentState, ...updates };
@@ -186,7 +201,7 @@ function streamAssistantResponse(
 
       // Handle conversation content
       if (data.chat_type === "conversation" && data.content) {
-        console.log(`Adding content from ${data.agent || 'Unknown'} (${data.node}):`, data.content);
+        console.log("Adding content from ${data.agent || 'Unknown'} (${data.node}):", data.content);
         updateState({
           chatType: "conversation",
           currentMessage: data.content, // For updates mode, we get complete content
