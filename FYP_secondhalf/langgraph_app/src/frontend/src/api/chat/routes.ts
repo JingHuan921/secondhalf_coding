@@ -1,8 +1,8 @@
-// src/routes.ts - UPDATED WITH AGENT SUPPORT AND ARTIFACT STATE
+// src/routes.ts - UPDATED WITH INTERRUPT SUPPORT
 
 interface StreamMessage {
   thread_id?: string;
-  chat_type?: "conversation" | "artifact" | "error";
+  chat_type?: "conversation" | "artifact" | "error" | "interrupt" | "routing_decision";
   content?: string;
   node?: string;
   agent?: string;
@@ -10,8 +10,10 @@ interface StreamMessage {
   artifact_type?: string;
   version?: string;
   timestamp?: string;
-  status?: "ready" | "user_feedback" | "finished" | "completed";
+  status?: "ready" | "user_feedback" | "finished" | "completed" | "waiting_for_user_input";
   error?: string;
+  message?: string; // For interrupt messages
+  next_node?: string; // For routing decisions
 }
 
 interface ConversationMessage {
@@ -42,7 +44,22 @@ interface ConversationState {
   currentAgent?: string;
   currentNode?: string;
   artifacts: ArtifactInfo[];
+  // New interrupt-related fields
+  isInterrupted: boolean;
+  interruptMessage?: string;
+  availableChoices?: Array<{value: string, label: string}>;
 }
+
+// Available routing choices
+const ROUTING_CHOICES = [
+  { value: 'classify_user_requirements', label: 'Classify User Requirements' },
+  { value: 'write_system_requirement', label: 'Write System Requirement' },
+  { value: 'build_requirement_model', label: 'Build Requirement Model' },
+  { value: 'write_req_specs', label: 'Write Requirement Specs' },
+  { value: 'revise_req_specs', label: 'Revise Requirement Specs' }, 
+  { value: 'no', label: 'END Node' }, 
+
+];
 
 // Enhanced version of your sendUserPrompt function
 async function sendUserPrompt(prompt: string, onStateUpdate: (state: ConversationState) => void) {
@@ -99,7 +116,8 @@ async function sendUserPrompt(prompt: string, onStateUpdate: (state: Conversatio
       requiresFeedback: false,
       isComplete: false,
       error: null,
-      artifacts: []
+      artifacts: [],
+      isInterrupted: false
     };
 
     onStateUpdate(initialState);
@@ -124,15 +142,13 @@ async function sendUserPrompt(prompt: string, onStateUpdate: (state: Conversatio
       requiresFeedback: false,
       isComplete: false,
       error: error instanceof Error ? error.message : "Unknown error occurred",
-      artifacts: []
+      artifacts: [],
+      isInterrupted: false
     };
 
     onStateUpdate(errorState);
   }
 }
-
-//1. intialize event resource from graph/stream/thread_id 
-
 
 function streamAssistantResponse(
   threadId: string, 
@@ -151,10 +167,9 @@ function streamAssistantResponse(
     requiresFeedback: false,
     isComplete: false,
     error: null,
-    artifacts: []
+    artifacts: [],
+    isInterrupted: false
   };
-
-  //This is to update ConversationState .. defined in this script 
 
   const updateState = (updates: Partial<ConversationState>) => {
     currentState = { ...currentState, ...updates };
@@ -182,6 +197,19 @@ function streamAssistantResponse(
         return;
       }
 
+      // Handle interrupt
+      if (data.chat_type === "interrupt") {
+        console.log("Graph interrupted, waiting for user input");
+        updateState({
+          isInterrupted: true,
+          isStreaming: false,
+          interruptMessage: data.message || "Please choose the next action",
+          availableChoices: ROUTING_CHOICES
+        });
+        eventSource.close(); // Close the stream, will be resumed after user choice
+        return;
+      }
+
       if (data.status) {
         console.log("Status update:", data.status);
         if (data.status === "user_feedback") {
@@ -189,25 +217,53 @@ function streamAssistantResponse(
             requiresFeedback: true,
             isStreaming: false
           });
+          eventSource.close();
+          return;
         } else if (data.status === "finished") {
           updateState({
             isComplete: true,
             isStreaming: false
           });
+          eventSource.close();
+          return;
+        } else if (data.status === "completed") {
+          updateState({
+            isStreaming: false,
+            isComplete: false
+          });
+        } else if (data.status === "waiting_for_user_input") {
+          updateState({
+            isInterrupted: true,
+            isStreaming: false,
+            interruptMessage: data.message || "Please choose the next action",
+            availableChoices: ROUTING_CHOICES
+          });
+          eventSource.close();
+          return;
         }
-        eventSource.close();
-        return;
       }
 
       // Handle conversation content
       if (data.chat_type === "conversation" && data.content) {
-        console.log("Adding content from ${data.agent || 'Unknown'} (${data.node}):", data.content);
+        console.log(`Adding content from ${data.agent || 'Unknown'} (${data.node}):`, data.content);
         updateState({
           chatType: "conversation",
-          currentMessage: data.content, // For updates mode, we get complete content
+          currentMessage: data.content,
           currentAgent: data.agent,
           currentNode: data.node,
-          isStreaming: false // Node completed, no longer streaming
+          isStreaming: false
+        });
+      }
+
+      // Handle routing decisions
+      if (data.chat_type === "routing_decision" && data.content) {
+        console.log(`Routing decision: ${data.content}`);
+        updateState({
+          chatType: "conversation",
+          currentMessage: data.content,
+          currentAgent: data.agent || "System",
+          currentNode: data.node,
+          isStreaming: false
         });
       }
 
@@ -297,6 +353,7 @@ async function resumeStream(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         thread_id: threadId,
+        resume_type: "feedback",
         review_action: reviewAction,
         human_comment: humanComment
       }),
@@ -325,11 +382,88 @@ async function resumeStream(
       requiresFeedback: false,
       isComplete: false,
       error: error instanceof Error ? error.message : "Failed to resume stream",
-      artifacts: []
+      artifacts: [],
+      isInterrupted: false
     };
 
     onStateUpdate(errorState);
   }
 }
 
-export { sendUserPrompt, resumeStream, type ConversationState, type ConversationMessage, type ArtifactInfo };
+// NEW: Function to handle routing choice and resume graph
+async function sendRoutingChoice(
+  threadId: string,
+  userChoice: string,
+  onStateUpdate: (state: ConversationState) => void
+) {
+  try {
+    console.log("Sending routing choice:", { threadId, userChoice });
+    
+    // Send the routing choice to your existing resume endpoint
+    const resumeRes = await fetch("http://localhost:8000/graph/stream/resume", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        thread_id: threadId,
+        resume_type: "routing_choice",
+        user_choice: userChoice
+      }),
+    });
+
+    if (!resumeRes.ok) {
+      const errorText = await resumeRes.text();
+      console.error("Resume request failed:", errorText);
+      throw new Error(`Failed to resume: ${resumeRes.status} ${resumeRes.statusText}`);
+    }
+
+    const resumeData = await resumeRes.json();
+    console.log("Resume response:", resumeData);
+    
+    // Clear interrupt state and restart streaming
+    // Update state first
+    onStateUpdate({ 
+      currentMessage: "",
+      isStreaming: true,
+      chatType: null,
+      threadId,
+      requiresFeedback: false,
+      isComplete: false,
+      error: null,
+      artifacts: [],
+      isInterrupted: false,
+      interruptMessage: undefined,
+      availableChoices: undefined
+    });
+    
+    // Then start streaming again
+    streamAssistantResponse(threadId, onStateUpdate);
+    
+  } catch (error) {
+    console.error("Error in sendRoutingChoice:", error);
+    
+    // Update state with error
+    const errorState: ConversationState = {
+      currentMessage: "",
+      isStreaming: false,
+      chatType: null,
+      threadId,
+      requiresFeedback: false,
+      isComplete: false,
+      error: error instanceof Error ? error.message : "Failed to send routing choice",
+      artifacts: [],
+      isInterrupted: false
+    };
+
+    onStateUpdate(errorState);
+  }
+}
+
+export { 
+  sendUserPrompt, 
+  resumeStream, 
+  sendRoutingChoice,
+  ROUTING_CHOICES,
+  type ConversationState, 
+  type ConversationMessage, 
+  type ArtifactInfo 
+};
