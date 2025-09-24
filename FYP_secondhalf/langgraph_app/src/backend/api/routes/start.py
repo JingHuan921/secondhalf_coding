@@ -52,7 +52,8 @@ VALID_ROUTING_CHOICES = {
     "write_system_requirement", 
     "build_requirement_model",
     "write_req_specs",
-    "revise_req_specs"
+    "revise_req_specs", 
+    "no"
 }
 
 @router.get("/")
@@ -124,7 +125,7 @@ def create_graph_streaming(request: InitialInput):
 
 # Enhanced resume endpoint that handles both feedback and routing choices
 @router.post("/graph/stream/resume", response_model=GraphResponse)
-def resume_graph_streaming(request: ResumeRequest):
+def resume_graph_streaming(request: EnhancedResumeRequest):
     thread_id = request.thread_id
     
     # Check if graph is available
@@ -135,8 +136,8 @@ def resume_graph_streaming(request: ResumeRequest):
         )
     
     # Handle enhanced resume request if it has the new fields
-    resume_type = getattr(request, 'resume_type', ResumeType.FEEDBACK)
-    user_choice = getattr(request, 'user_choice', None)
+    resume_type = request.resume_type or ResumeType.FEEDBACK
+    user_choice = request.user_choice or None
     
     print(f"DEBUG: Resuming graph for thread_id={thread_id}, type={resume_type}")
     

@@ -114,6 +114,7 @@ def add_artifacts(existing: List[Artifact], new: List[Artifact]) -> List[Artifac
     """
     Add new artifacts with intelligent versioning:
     - If same type but different content: increment version and add both
+    - If same type and same content but different agent: also increment a version
     - If different type: always add
     - If completely new: add as version 1.0
     """
@@ -137,6 +138,14 @@ def add_artifacts(existing: List[Artifact], new: List[Artifact]) -> List[Artifac
             # Create new artifact with incremented version
             updated_artifact = _create_versioned_artifact(new_artifact, new_version)
             result.append(updated_artifact)
+            pending_result = result
+            seen = set()
+            result = [] 
+            for item in pending_result: 
+                key = (item.id, item.timestamp)
+                if key not in seen: 
+                    seen.add(key) 
+                    result.append(item)
     
     # Sort by type, then by version for consistent ordering
     return sorted(result, key=lambda a: a.timestamp)

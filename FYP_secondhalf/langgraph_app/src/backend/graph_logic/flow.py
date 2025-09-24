@@ -549,8 +549,8 @@ async def handle_routing_decision(state: ArtifactState) -> ArtifactState:
     logger.debug("DEBUG: --- Handling routing decision ---")
     
     # Check if we have user input from the resumed state
-    if hasattr(state, 'human_request') and state.human_request:
-        user_choice = state.human_request
+    if hasattr(state, 'next_routing_node') and state.next_routing_node:
+        user_choice = state.next_routing_node
         print(f"DEBUG: Using user choice from human_request: {user_choice}")
         
         # Validate the choice

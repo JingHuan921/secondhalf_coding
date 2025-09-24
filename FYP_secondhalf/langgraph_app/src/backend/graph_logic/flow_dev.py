@@ -9,6 +9,12 @@ from operator import add
 import time
 import logging
 import sys
+import aiosqlite
+
+from backend.path_global_file import SQLITE_DB
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+graph = None 
 
 def setup_minimal_logging():
     """Setup minimal logging - suppress all LangGraph server noise"""
@@ -486,74 +492,93 @@ async def verdict_to_revise_SRS(state: ArtifactState) -> str:
 
 
 async def revise_req_specs(state: ArtifactState) -> ArtifactState: 
+    logger.debug("Starting revise_req_specs node")
+
     # 1. retrieve the latest version of validation report
     latest_val_report = StateManager.get_latest_artifact_by_type(state, ArtifactType.VAL_REPORT)    
-    # not found 
-    if not latest_val_report: 
-        return None
-    else: 
-        try: 
-
+    
+    try: 
+        if latest_val_report: 
             val_report_content = latest_val_report.content 
             val_report_id = latest_val_report.id
-            latest_srs = StateManager.get_latest_artifact_by_type(state, ArtifactType.SW_REQ_SPECS)    
-            srs_content = latest_srs.content
-            srs_id = latest_srs.id
-            """
-            Do some processing with the content 
-            """
-            system_prompt = PROMPT_LIBRARY.get("write_req_specs_with_val_rep")
-            prompt_input = system_prompt.format(
-                val_report_content=val_report_content, srs_content=srs_content, 
-                srs_id=srs_id, val_report_id=val_report_id)
-            
-            if not system_prompt: 
-                raise ValueError("Missing 'write_req_specs_with_val_rep' prompt in prompt library")
+            logger.debug(f"Retrieved latest VAL_REPORT (id={val_report_id}, length={len(str(val_report_content))})")
+        else: 
+            logger.debug("No VAL_REPORT found in state, directly return state")
+            return state
+        
+        latest_srs = StateManager.get_latest_artifact_by_type(state, ArtifactType.SW_REQ_SPECS)    
+        srs_content = latest_srs.content if latest_srs else None
+        srs_id = latest_srs.id if latest_srs else None
+        logger.debug(f"Retrieved latest SW_REQ_SPECS (id={srs_id}, length={len(str(srs_content)) if srs_content else 0})")
 
-            llm_with_structured_output = llm.with_structured_output(SoftwareRequirementSpecs)
-            response = await llm_with_structured_output.ainvoke(
-                [
-                    SystemMessage(content=prompt_input), 
-                    HumanMessage(content=state.conversations[-1].content)
-                ]
-            )
+        # Build system prompt
+        system_prompt = PROMPT_LIBRARY.get("write_req_specs_with_val_rep")
+        if not system_prompt: 
+            raise ValueError("Missing 'write_req_specs_with_val_rep' prompt in prompt library")
 
-            converted_text = await pydantic_to_json_text(response) 
+        prompt_input = system_prompt.format(
+            val_report_content=val_report_content, 
+            srs_content=srs_content, 
+            srs_id=srs_id, 
+            val_report_id=val_report_id
+        )
+        logger.debug(f"Prompt input length: {len(prompt_input)}")
 
-            artifact = create_artifact(
-                agent=AgentType.ARCHIVIST, 
-                artifact_type=ArtifactType.SW_REQ_SPECS, 
-                content=response,
-            )
+        # LLM call
+        llm_with_structured_output = llm.with_structured_output(SoftwareRequirementSpecs)
+        response = await llm_with_structured_output.ainvoke(
+            [
+                SystemMessage(content=prompt_input), 
+                HumanMessage(content=state.conversations[-1].content)
+            ]
+        )
+        logger.debug(f"LLM structured response type={type(response)}, repr length={len(str(response))}")
 
-            conversation = create_conversation(
-                agent=AgentType.ARCHIVIST, 
-                artifact_id = artifact.id, 
-                content=converted_text,
-            )
-            return {
-                "artifacts": [artifact], 
-                "conversations": [conversation],
-            }
-        except Exception as e: 
-            return{
-                "errors": [f"Classification failed: {str(e)}"]
-            }
+        # Convert to JSON text
+        converted_text = await pydantic_to_json_text(response) 
+        logger.debug(f"Converted JSON text length: {len(converted_text)}")
 
+        # Artifact + Conversation creation
+        artifact = create_artifact(
+            agent=AgentType.ARCHIVIST, 
+            artifact_type=ArtifactType.SW_REQ_SPECS, 
+            content=response,
+        )
+        logger.debug(f"Created artifact {artifact.id} with content length={len(str(artifact.content))}")
+
+        conversation = create_conversation(
+            agent=AgentType.ARCHIVIST, 
+            artifact_id=artifact.id, 
+            content=converted_text,
+        )
+        logger.debug(f"Created conversation {conversation.artifact_id} with content length={len(conversation.content)}")
+
+        return {
+            "artifacts": [artifact], 
+            "conversations": [conversation],
+        }
+    except Exception as e: 
+        logger.exception("Error in revise_req_specs")
+        return {
+            "errors": [f"Classification failed: {str(e)}"]
+        }
 
 async def handle_routing_decision(state: ArtifactState) -> ArtifactState:
     """
-    Dummy rerouting node for LangGraph Studio.
-    Instead of asking user, just hardcode reroute to 'build_requirement_model'.
+    Handle routing decision with user input from human_request.
+    If no human_request is provided, this will cause an interrupt.
     """
-    print("--- Handling routing decision ---")
+    logger.debug("--- Handling routing decision ---")
+
     state.next_routing_node = "build_requirement_model"
     return state
 
 
 def execute_routing_decision(state: ArtifactState) -> str:
-    """Return the chosen node (dummy: always build_requirement_model)."""
-    return state.next_routing_node
+    return state.next_routing_node or 'no'
+
+
+
 
 
 """Create workflow with enhanced logging"""
@@ -598,10 +623,12 @@ workflow.add_conditional_edges(
             "build_requirement_model": "build_requirement_model",
             "write_req_specs": "write_req_specs",
             "revise_req_specs": "revise_req_specs",
+            "no": END,
         }
     )
 
 graph = workflow.compile(interrupt_before=["handle_routing_decision"])
 
-# graph = workflow.compile()
+
+
 

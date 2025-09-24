@@ -1,6 +1,6 @@
-// Chat.tsx
+// Chat.tsx - UPDATED WITH INTERRUPT SUPPORT
 import { useState } from "react";
-import { sendUserPrompt, resumeStream, type ConversationState } from "../api/chat/routes";
+import { sendUserPrompt, resumeStream, sendRoutingChoice, ROUTING_CHOICES, type ConversationState } from "../api/chat/routes";
 import {
   PromptInput,
   PromptInputButton,
@@ -30,13 +30,6 @@ const models = [
   { id: "claude-opus-4-20250514", name: "Claude 4 Opus" },
 ];
 
-
-//1. add a complete message to chat history
-//2. let user inputs feedback text and appends the text for "user" role 
-//3. handles user approval of feedback 
-//4. renders the messages from langgraph
-//5. displays error and thread id
-
 const InputDemo = () => {
   // UI-specific state
   const [inputText, setInputText] = useState<string>("");
@@ -46,10 +39,9 @@ const InputDemo = () => {
   
   // Chat history (separate from streaming state)
   const [messages, setMessages] = useState<
-  { role: "user" | "assistant"; text: string; agent?: string }[]
->([]);
+    { role: "user" | "assistant"; text: string; agent?: string }[]
+  >([]);
 
-  
   // Current conversation state from routes.ts
   const [conversationState, setConversationState] = useState<ConversationState | null>(null);
 
@@ -73,8 +65,7 @@ const InputDemo = () => {
         }
         return prev;
       });
-}
-
+    }
   };
 
   // User enters and submit the chat input text
@@ -131,8 +122,28 @@ const InputDemo = () => {
     }
   };
 
+  // NEW: Handle routing choice selection
+  const handleRoutingChoice = async (choice: string) => {
+    if (!conversationState?.threadId) return;
+
+    // Add user's routing choice to chat history
+    const choiceLabel = ROUTING_CHOICES.find(c => c.value === choice)?.label || choice;
+    const userChoiceMessage = { 
+      role: "user" as const, 
+      text: `Selected: ${choiceLabel}` 
+    };
+    setMessages(prev => [...prev, userChoiceMessage]);
+
+    try {
+      await sendRoutingChoice(conversationState.threadId, choice, handleStateUpdate);
+    } catch (error) {
+      console.error("Error sending routing choice:", error);
+    }
+  };
+
   // Determine what UI state to show
   const showFeedbackButtons = conversationState?.requiresFeedback && !conversationState.isComplete;
+  const showRoutingChoice = conversationState?.isInterrupted && conversationState.availableChoices;
   const isLoading = conversationState?.isStreaming || false;
 
   return (
@@ -164,6 +175,15 @@ const InputDemo = () => {
               </Message>
             )}
 
+            {/* Show interrupt message */}
+            {conversationState?.isInterrupted && conversationState.interruptMessage && (
+              <Message from="assistant">
+                <MessageContent>
+                  <div className="font-bold text-sm text-gray-600">System</div>
+                  <Response>{conversationState.interruptMessage}</Response>
+                </MessageContent>
+              </Message>
+            )}
             
             {/* Show thread ID for debugging */}
             {conversationState?.threadId && (
@@ -183,64 +203,88 @@ const InputDemo = () => {
         </Conversation>
       </div>
 
-        {/* Conditional UI based on conversation state */}
-        {showFeedbackButtons ? (
-          <div className="mt-auto">
-            {!showFeedbackInput ? (
-              // Show approve/feedback buttons
-              <div className="flex justify-center items-center">
-                <div className="bg-grey-100 rounded-lg p-6 w-full flex justify-center max-w-sm sm:max-w-md lg:max-w-lg">
-                  <div className="text-center">
-                    <p className="mb-4 text-xl">
-                      Do you approve the provided feedback?
-                    </p>
-                    <Button onClick={handleApprove} className="mr-4">
-                      Approve
-                    </Button>
-                    <Button onClick={() => setShowFeedbackInput(true)}>
-                      Provide Feedback
-                    </Button>
-                  </div>
-                </div>
+      {/* Conditional UI based on conversation state */}
+      {showRoutingChoice ? (
+        // Show routing choice buttons
+        <div className="mt-auto">
+          <div className="flex justify-center items-center">
+            <div className="bg-grey-100 rounded-lg p-6 w-full flex flex-col items-center max-w-lg">
+              <div className="text-center mb-4">
+                <p className="text-xl mb-4">Choose the next action:</p>
               </div>
-            ) : (
-              // Show feedback input
-              <div>
-                <PromptInput>
-                  <PromptInputTextarea
-                    onChange={(e) => setFeedbackText(e.target.value)}
-                    value={feedbackText}
-                    placeholder="Enter your feedback"
-                    className="w-full py-2 px-4 border rounded-md"
-                  />
-                </PromptInput>
-                <div className="flex gap-2 mt-2">
-                  <Button onClick={handleFeedback} disabled={!feedbackText.trim()}>
-                    Send Feedback
-                  </Button>
-                  <Button 
-                    variant="outline" 
-                    onClick={() => {
-                      setShowFeedbackInput(false);
-                      setFeedbackText("");
-                    }}
+              <div className="grid grid-cols-1 gap-2 w-full">
+                {conversationState.availableChoices?.map((choice) => (
+                  <Button
+                    key={choice.value}
+                    onClick={() => handleRoutingChoice(choice.value)}
+                    className="w-full text-left justify-start"
+                    variant="outline"
                   >
-                    Cancel
+                    {choice.label}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : showFeedbackButtons ? (
+        // Show feedback buttons (existing logic)
+        <div className="mt-auto">
+          {!showFeedbackInput ? (
+            // Show approve/feedback buttons
+            <div className="flex justify-center items-center">
+              <div className="bg-grey-100 rounded-lg p-6 w-full flex justify-center max-w-sm sm:max-w-md lg:max-w-lg">
+                <div className="text-center">
+                  <p className="mb-4 text-xl">
+                    Do you approve the provided feedback?
+                  </p>
+                  <Button onClick={handleApprove} className="mr-4">
+                    Approve
+                  </Button>
+                  <Button onClick={() => setShowFeedbackInput(true)}>
+                    Provide Feedback
                   </Button>
                 </div>
               </div>
-            )}
-          </div>
-        ) : (
-          // Show normal chat input
-          <div className="mt-auto">
-            <PromptInput onSubmit={handleSubmit}>
-              <PromptInputTextarea
-                onChange={(e) => setInputText(e.target.value)}
-                value={inputText}
-                className="w-full py-2 px-4 border rounded-md"
-                disabled={isLoading}
-              />
+            </div>
+          ) : (
+            // Show feedback input
+            <div>
+              <PromptInput>
+                <PromptInputTextarea
+                  onChange={(e) => setFeedbackText(e.target.value)}
+                  value={feedbackText}
+                  placeholder="Enter your feedback"
+                  className="w-full py-2 px-4 border rounded-md"
+                />
+              </PromptInput>
+              <div className="flex gap-2 mt-2">
+                <Button onClick={handleFeedback} disabled={!feedbackText.trim()}>
+                  Send Feedback
+                </Button>
+                <Button 
+                  variant="outline" 
+                  onClick={() => {
+                    setShowFeedbackInput(false);
+                    setFeedbackText("");
+                  }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+      ) : (
+        // Show normal chat input
+        <div className="mt-auto">
+          <PromptInput onSubmit={handleSubmit}>
+            <PromptInputTextarea
+              onChange={(e) => setInputText(e.target.value)}
+              value={inputText}
+              className="w-full py-2 px-4 border rounded-md"
+              disabled={isLoading}
+            />
             <PromptInputToolbar>
               <PromptInputTools>
                 <PromptInputButton>
