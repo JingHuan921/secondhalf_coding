@@ -1,6 +1,6 @@
-// Chat.tsx - UPDATED WITH INTERRUPT SUPPORT
-import { useState } from "react";
-import { sendUserPrompt, resumeStream, sendRoutingChoice, ROUTING_CHOICES, type ConversationState } from "../api/chat/routes";
+// Chat.tsx - SIMPLIFIED VERSION USING STATE MESSAGES
+import { useState, useMemo } from "react";
+import { sendUserPrompt, resumeStream, sendRoutingChoice, ROUTING_CHOICES, type ConversationState, type ConversationMessage } from "../api/chat/routes";
 import {
   PromptInput,
   PromptInputButton,
@@ -37,45 +37,101 @@ const InputDemo = () => {
   const [feedbackText, setFeedbackText] = useState<string>("");
   const [showFeedbackInput, setShowFeedbackInput] = useState<boolean>(false);
   
-  // Chat history (separate from streaming state)
-  const [messages, setMessages] = useState<
-    { role: "user" | "assistant"; text: string; agent?: string }[]
-  >([]);
-
-  // Current conversation state from routes.ts
+  // Current conversation state from routes.ts (now includes messages array)
   const [conversationState, setConversationState] = useState<ConversationState | null>(null);
 
   // Handle state updates from routes.ts
   const handleStateUpdate = (newState: ConversationState) => {
+    console.log("State update received:", newState);
+    console.log("Messages in state:", newState.messages);
     setConversationState(newState);
+  };
+
+  // Create grouped messages for rendering from the state messages
+  const groupedMessages = useMemo(() => {
+    if (!conversationState?.messages) return [];
+
+    const allMessages = [...conversationState.messages];
     
-    // If we have a complete message, add it to chat history
-    if (newState.currentMessage && (newState.isComplete || newState.requiresFeedback)) {
-      setMessages(prev => {
-        const lastMessage = prev[prev.length - 1];
-        if (!lastMessage || lastMessage.text !== newState.currentMessage) {
-          return [
-            ...prev, 
-            { 
-              role: "assistant", 
-              text: newState.currentMessage, 
-              agent: newState.currentAgent
-            }
-          ];
-        }
-        return prev;
+    // Add current streaming message if it exists and is different
+    if (conversationState.isStreaming && conversationState.currentMessage) {
+      const lastMessage = allMessages[allMessages.length - 1];
+      const isDifferentFromLast = !lastMessage || 
+        lastMessage.text !== conversationState.currentMessage ||
+        lastMessage.agent !== conversationState.currentAgent;
+      
+      if (isDifferentFromLast) {
+        allMessages.push({
+          role: "assistant",
+          text: conversationState.currentMessage,
+          agent: conversationState.currentAgent,
+          isComplete: false
+        });
+      }
+    }
+
+    // Add interrupt message if exists
+    if (conversationState.isInterrupted && conversationState.interruptMessage) {
+      allMessages.push({
+        role: "assistant",
+        text: conversationState.interruptMessage,
+        agent: "System",
+        isComplete: true
       });
     }
-  };
+
+    // Group consecutive messages by agent
+    const grouped: Array<{
+      agent: string;
+      role: "user" | "assistant";
+      messages: Array<{text: string; isComplete: boolean}>;
+    }> = [];
+
+    allMessages.forEach((msg) => {
+      const currentAgent = msg.role === "user" ? "You" : (msg.agent || "Assistant");
+      const lastGroup = grouped[grouped.length - 1];
+      
+      // If last group has same agent and role, add to it
+      if (lastGroup && lastGroup.agent === currentAgent && lastGroup.role === msg.role) {
+        lastGroup.messages.push({
+          text: msg.text,
+          isComplete: msg.isComplete
+        });
+      } else {
+        // Create new group
+        grouped.push({
+          agent: currentAgent,
+          role: msg.role,
+          messages: [{
+            text: msg.text,
+            isComplete: msg.isComplete
+          }]
+        });
+      }
+    });
+
+    return grouped;
+  }, [conversationState]);
 
   // User enters and submit the chat input text
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!inputText.trim()) return;
 
-    // Add user message to chat history
-    const userMessage = { role: "user" as const, text: inputText };
-    setMessages(prev => [...prev, userMessage]);
+    // Add user message to the state by updating it manually
+    const userMessage: ConversationMessage = { 
+      role: "user", 
+      text: inputText,
+      isComplete: true
+    };
+
+    // Update state to include the user message
+    if (conversationState) {
+      setConversationState({
+        ...conversationState,
+        messages: [...conversationState.messages, userMessage]
+      });
+    }
 
     // Clear input
     const currentInput = inputText;
@@ -86,7 +142,6 @@ const InputDemo = () => {
       await sendUserPrompt(currentInput, handleStateUpdate);
     } catch (error) {
       console.error("Error sending prompt:", error);
-      // Handle error state - could show error message in UI
     }
   };
 
@@ -122,17 +177,23 @@ const InputDemo = () => {
     }
   };
 
-  // NEW: Handle routing choice selection
+  // Handle routing choice selection
   const handleRoutingChoice = async (choice: string) => {
     if (!conversationState?.threadId) return;
 
-    // Add user's routing choice to chat history
+    // Add user's routing choice to state
     const choiceLabel = ROUTING_CHOICES.find(c => c.value === choice)?.label || choice;
-    const userChoiceMessage = { 
-      role: "user" as const, 
-      text: `Selected: ${choiceLabel}` 
+    const userChoiceMessage: ConversationMessage = { 
+      role: "user", 
+      text: `Selected: ${choiceLabel}`,
+      isComplete: true
     };
-    setMessages(prev => [...prev, userChoiceMessage]);
+
+    // Update state to include the user choice
+    setConversationState({
+      ...conversationState,
+      messages: [...conversationState.messages, userChoiceMessage]
+    });
 
     try {
       await sendRoutingChoice(conversationState.threadId, choice, handleStateUpdate);
@@ -151,39 +212,26 @@ const InputDemo = () => {
       <div className="flex-grow overflow-y-auto">
         <Conversation>
           <ConversationContent>
-            {/* Show completed messages */}
-            {messages.map((message, idx) => (
-              <Message from={message.role} key={idx}>
+            {/* Render grouped messages */}
+            {groupedMessages.map((group, groupIdx) => (
+              <Message from={group.role} key={groupIdx}>
                 <MessageContent>
-                  <div className="font-bold text-sm text-gray-600">
-                    {message.role === "user" ? "You" : message.agent || "Assistant"}
+                  <div className="font-bold text-sm text-gray-600 mb-2">
+                    {group.agent}
                   </div>
-                  <Response>{message.text}</Response>
+                  <div className="space-y-2">
+                    {group.messages.map((msg, msgIdx) => (
+                      <Response 
+                        key={msgIdx}
+                        className={!msg.isComplete ? "opacity-70" : ""}
+                      >
+                        {msg.text}
+                      </Response>
+                    ))}
+                  </div>
                 </MessageContent>
               </Message>
             ))}
-            
-            {/* Show current streaming message */}
-            {conversationState?.isStreaming && conversationState.currentMessage && (
-              <Message from="assistant">
-                <MessageContent>
-                  <div className="font-bold text-sm text-gray-600">
-                    {conversationState.currentAgent || "Assistant"}
-                  </div>
-                  <Response>{conversationState.currentMessage}</Response>
-                </MessageContent>
-              </Message>
-            )}
-
-            {/* Show interrupt message */}
-            {conversationState?.isInterrupted && conversationState.interruptMessage && (
-              <Message from="assistant">
-                <MessageContent>
-                  <div className="font-bold text-sm text-gray-600">System</div>
-                  <Response>{conversationState.interruptMessage}</Response>
-                </MessageContent>
-              </Message>
-            )}
             
             {/* Show thread ID for debugging */}
             {conversationState?.threadId && (

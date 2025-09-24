@@ -272,7 +272,7 @@ node_to_agent_map = {
     "write_req_specs": "Archivist",
     "verdict_to_revise_SRS": "Archivist",
     "revise_req_specs": "Archivist",
-    "handle_routing_decision": "System"  # Add the routing decision node
+    "handle_routing_decision": "Routing"  # Add the routing decision node
 }
 
 # FIXED: Remove Depends(get_graph) and access graph from shared_resources
@@ -378,7 +378,7 @@ async def stream_graph(request: Request, thread_id: str):
                             "chat_type": "conversation",
                             "content": conversation.content,
                             "node": node_name,
-                            "agent": node_to_agent_map.get(node_name, conversation.agent.value if conversation.agent else "Assistant"),
+                            "agent": conversation.agent.value,
                             "artifact_id": conversation.artifact_id,
                             "timestamp": conversation.timestamp.isoformat()
                         })
@@ -391,7 +391,7 @@ async def stream_graph(request: Request, thread_id: str):
                             "chat_type": "artifact",
                             "artifact_id": artifact.id,
                             "artifact_type": artifact.content_type.value,
-                            "agent": node_to_agent_map.get(node_name, artifact.created_by.value),
+                            "agent": artifact.created_by.value,
                             "node": node_name,
                             "version": artifact.version,
                             "timestamp": artifact.timestamp.isoformat(),

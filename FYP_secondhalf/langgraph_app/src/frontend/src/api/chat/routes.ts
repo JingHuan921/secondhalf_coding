@@ -1,4 +1,4 @@
-// src/routes.ts - UPDATED WITH INTERRUPT SUPPORT
+// src/routes.ts - FIXED WITH MESSAGE ACCUMULATION
 
 interface StreamMessage {
   thread_id?: string;
@@ -22,6 +22,7 @@ interface ConversationMessage {
   agent?: string;
   timestamp?: string;
   artifact_id?: string;
+  isComplete: boolean;
 }
 
 interface ArtifactInfo {
@@ -48,6 +49,8 @@ interface ConversationState {
   isInterrupted: boolean;
   interruptMessage?: string;
   availableChoices?: Array<{value: string, label: string}>;
+  // ADD: Array to store all messages
+  messages: ConversationMessage[];
 }
 
 // Available routing choices
@@ -58,10 +61,9 @@ const ROUTING_CHOICES = [
   { value: 'write_req_specs', label: 'Write Requirement Specs' },
   { value: 'revise_req_specs', label: 'Revise Requirement Specs' }, 
   { value: 'no', label: 'END Node' }, 
-
 ];
 
-// Enhanced version of your sendUserPrompt function
+// Receive user prompt and initialize ConversationState to be rendered to frontend
 async function sendUserPrompt(prompt: string, onStateUpdate: (state: ConversationState) => void) {
   try {
     console.log("Sending prompt:", prompt);
@@ -117,7 +119,8 @@ async function sendUserPrompt(prompt: string, onStateUpdate: (state: Conversatio
       isComplete: false,
       error: null,
       artifacts: [],
-      isInterrupted: false
+      isInterrupted: false,
+      messages: [] // Initialize empty messages array
     };
 
     onStateUpdate(initialState);
@@ -143,7 +146,8 @@ async function sendUserPrompt(prompt: string, onStateUpdate: (state: Conversatio
       isComplete: false,
       error: error instanceof Error ? error.message : "Unknown error occurred",
       artifacts: [],
-      isInterrupted: false
+      isInterrupted: false,
+      messages: []
     };
 
     onStateUpdate(errorState);
@@ -168,12 +172,22 @@ function streamAssistantResponse(
     isComplete: false,
     error: null,
     artifacts: [],
-    isInterrupted: false
+    isInterrupted: false,
+    messages: []
   };
 
   const updateState = (updates: Partial<ConversationState>) => {
     currentState = { ...currentState, ...updates };
     onStateUpdate(currentState);
+  };
+
+  const addMessage = (message: ConversationMessage) => {
+    const newMessages = [...currentState.messages, message];
+    updateState({
+      messages: newMessages,
+      currentMessage: message.text,
+      currentAgent: message.agent
+    });
   };
 
   eventSource.onopen = (event) => {
@@ -246,10 +260,19 @@ function streamAssistantResponse(
       // Handle conversation content
       if (data.chat_type === "conversation" && data.content) {
         console.log(`Adding content from ${data.agent || 'Unknown'} (${data.node}):`, data.content);
+        
+        // ADD MESSAGE TO ACCUMULATION instead of overwriting
+        addMessage({
+          role: "assistant",
+          text: data.content,
+          agent: data.agent,
+          timestamp: data.timestamp || new Date().toISOString(),
+          artifact_id: data.artifact_id,
+          isComplete: true
+        });
+
         updateState({
           chatType: "conversation",
-          currentMessage: data.content,
-          currentAgent: data.agent,
           currentNode: data.node,
           isStreaming: false
         });
@@ -258,10 +281,18 @@ function streamAssistantResponse(
       // Handle routing decisions
       if (data.chat_type === "routing_decision" && data.content) {
         console.log(`Routing decision: ${data.content}`);
+        
+        // ADD MESSAGE TO ACCUMULATION instead of overwriting
+        addMessage({
+          role: "assistant",
+          text: data.content,
+          agent: data.agent || "Routing",
+          timestamp: data.timestamp || new Date().toISOString(),
+          isComplete: true
+        });
+
         updateState({
           chatType: "conversation",
-          currentMessage: data.content,
-          currentAgent: data.agent || "System",
           currentNode: data.node,
           isStreaming: false
         });
@@ -383,7 +414,8 @@ async function resumeStream(
       isComplete: false,
       error: error instanceof Error ? error.message : "Failed to resume stream",
       artifacts: [],
-      isInterrupted: false
+      isInterrupted: false,
+      messages: []
     };
 
     onStateUpdate(errorState);
@@ -432,7 +464,8 @@ async function sendRoutingChoice(
       artifacts: [],
       isInterrupted: false,
       interruptMessage: undefined,
-      availableChoices: undefined
+      availableChoices: undefined,
+      messages: [] // Keep existing messages - don't clear them
     });
     
     // Then start streaming again
@@ -451,7 +484,8 @@ async function sendRoutingChoice(
       isComplete: false,
       error: error instanceof Error ? error.message : "Failed to send routing choice",
       artifacts: [],
-      isInterrupted: false
+      isInterrupted: false,
+      messages: []
     };
 
     onStateUpdate(errorState);
