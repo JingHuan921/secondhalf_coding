@@ -37,7 +37,9 @@ Check if http://localhost:5173/ pops up in terminal,
 run `http://localhost:5173/chat` on browser
 
 
-Input example in chatbot
+## Input example in chatbot
+
+
 • ID: R1
 ○ Name: Food Diary Feature
 ○ Description: Implement a food diary that allows users to log their meals, track
@@ -61,8 +63,3 @@ discussions.
 ○ Description: Integrate with major food delivery platforms like Uber Eats,
 Grubhub, and DoorDash to allow users to order food directly from the app.
 ○ Priority: High
-
-Notes: 
-- langgraph_app/src/agent/graph.py line 33 is the entry point to import defined graph 
-- output for use case diagram (png file) is in FYP_secondhalf/langgraph_app/src/backend/output folder
-
