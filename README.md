@@ -1,12 +1,19 @@
-FYP_secondhalf/langgraph_app/src/backend/agents/analyst.py contains: 
-- AgentState
-- Analyst flow
+To test code: 
+cd FYP_secondhalf
+create virtual environment 
+.\venv\Scripts\activate
+[For backend]: 
+cd langgraph_app\src
+uvicorn main:app
+[For frontend]: 
+cd langgraph_app\src\frontend
+npm run dev
+[Optional]: If npm run dev is not successful, please run `npm install` first
+Check if http://localhost:5173/ pops up in terminal, 
+run `http://localhost:5173/chat` on browser
 
-To test out the flow: 
-- cd FYP_secondhalf/langgraph_app 
-- langgraph dev
 
-input example: 
+Input example in chatbot
 • ID: R1
 ○ Name: Food Diary Feature
 ○ Description: Implement a food diary that allows users to log their meals, track
