@@ -386,12 +386,22 @@ async def stream_graph(request: Request, thread_id: str):
 
                     # Handle new artifacts
                     new_artifacts = updates.get("artifacts", [])
+                    # In your Python backend streaming code
                     for artifact in new_artifacts:
+                        # Serialize Pydantic model content properly
+                        content_data = None
+                        if artifact.content:
+                            if hasattr(artifact.content, 'model_dump'):  # Pydantic v2
+                                content_data = artifact.content.model_dump()
+                            else:
+                                content_data = str(artifact.content)  # Fallback for strings
+                        
                         artifact_payload = json.dumps({
                             "chat_type": "artifact",
                             "artifact_id": artifact.id,
                             "artifact_type": artifact.content_type.value,
-                            "agent": artifact.created_by.value,
+                            "agent": artifact.created_by.value if hasattr(artifact.created_by, 'value') else str(artifact.created_by),
+                            "content": content_data,  # Now properly serialized
                             "node": node_name,
                             "version": artifact.version,
                             "timestamp": artifact.timestamp.isoformat(),

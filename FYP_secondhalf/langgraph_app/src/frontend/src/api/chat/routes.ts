@@ -32,6 +32,7 @@ interface ArtifactInfo {
   version: string;
   timestamp: string;
   status: string;
+  content?: any; // Add content field for the actual artifact data
 }
 
 interface ConversationState {
@@ -63,7 +64,7 @@ const ROUTING_CHOICES = [
   { value: 'no', label: 'END Node' }, 
 ];
 
-// Receive user prompt and initialize ConversationState to be rendered to frontend
+// Enhanced version of your sendUserPrompt function
 async function sendUserPrompt(prompt: string, onStateUpdate: (state: ConversationState) => void) {
   try {
     console.log("Sending prompt:", prompt);
@@ -278,15 +279,31 @@ function streamAssistantResponse(
         });
       }
 
+
       // Handle routing decisions
       if (data.chat_type === "routing_decision" && data.content) {
         console.log(`Routing decision: ${data.content}`);
         
+        // Create a better routing message using node labels
+        let routingMessage = data.content;
+
+        const routingMatch = data.content.match(/Routing to:\s*(.+)/i);
+        if (routingMatch) {
+          const nodeValue = routingMatch[1].trim();
+          const choice = ROUTING_CHOICES.find(item => item.value === nodeValue);
+
+          if (!choice) {
+            throw new Error(`Invalid routing value: "${nodeValue}" not found in ROUTING_CHOICES`);
+          }
+
+          routingMessage = `Now routing to: ${choice.label}`;
+        }
+
         // ADD MESSAGE TO ACCUMULATION instead of overwriting
         addMessage({
           role: "assistant",
-          text: data.content,
-          agent: data.agent || "Routing",
+          text: routingMessage,
+          agent: "System",
           timestamp: data.timestamp || new Date().toISOString(),
           isComplete: true
         });
@@ -301,6 +318,11 @@ function streamAssistantResponse(
       // Handle artifact creation
       if (data.chat_type === "artifact") {
         console.log(`Artifact created by ${data.agent}: ${data.artifact_type}`);
+        console.log("Raw artifact data:", data);
+        
+        // The content is already parsed as a JavaScript object, don't parse it again
+        const parsedContent = data.content || null;
+        console.log("Artifact content (already parsed):", parsedContent);
         
         const newArtifact: ArtifactInfo = {
           id: data.artifact_id || '',
@@ -308,7 +330,8 @@ function streamAssistantResponse(
           agent: data.agent || '',
           version: data.version || '1.0',
           timestamp: data.timestamp || new Date().toISOString(),
-          status: data.status || 'completed'
+          status: data.status || 'completed',
+          content: parsedContent  // Use directly, don't parse again
         };
 
         updateState({
@@ -492,10 +515,30 @@ async function sendRoutingChoice(
   }
 }
 
+// Function to fetch artifact content by ID
+async function fetchArtifactContent(artifactId: string): Promise<any> {
+  try {
+    const response = await fetch(`http://localhost:8000/artifacts/${artifactId}`, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" }
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch artifact: ${response.status}`);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Error fetching artifact content:", error);
+    throw error;
+  }
+}
+
 export { 
   sendUserPrompt, 
   resumeStream, 
   sendRoutingChoice,
+  fetchArtifactContent,
   ROUTING_CHOICES,
   type ConversationState, 
   type ConversationMessage, 

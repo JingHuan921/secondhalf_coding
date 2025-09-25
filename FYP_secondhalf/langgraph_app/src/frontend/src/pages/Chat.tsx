@@ -1,6 +1,6 @@
-// Chat.tsx - SIMPLIFIED VERSION USING STATE MESSAGES
+// Chat.tsx - WITH ARTIFACT DISPLAY PANEL (FIXED)
 import { useState, useMemo } from "react";
-import { sendUserPrompt, resumeStream, sendRoutingChoice, ROUTING_CHOICES, type ConversationState, type ConversationMessage } from "../api/chat/routes";
+import { sendUserPrompt, resumeStream, sendRoutingChoice, fetchArtifactContent, ROUTING_CHOICES, type ConversationState, type ConversationMessage, type ArtifactInfo } from "../api/chat/routes";
 import {
   PromptInput,
   PromptInputButton,
@@ -14,7 +14,7 @@ import {
   PromptInputToolbar,
   PromptInputTools,
 } from "@/components/ai-elements/prompt-input";
-import { GlobeIcon, MicIcon } from "lucide-react";
+import { GlobeIcon, MicIcon, FileTextIcon, CodeIcon, ImageIcon, DownloadIcon, EyeIcon } from "lucide-react";
 import {
   Conversation,
   ConversationContent,
@@ -24,11 +24,324 @@ import { Message, MessageContent } from "@/components/ai-elements/message";
 import { Response } from "@/components/ai-elements/response";
 import { Button } from "@/components/ui/button";
 
+// Basic Badge Component
+const Badge = ({ children, variant = "default", className = "" }: { 
+  children: React.ReactNode; 
+  variant?: "default" | "secondary" | "destructive" | "outline";
+  className?: string;
+}) => {
+  const baseClasses = "inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium";
+  const variantClasses = {
+    default: "bg-blue-100 text-blue-800",
+    secondary: "bg-gray-100 text-gray-800", 
+    destructive: "bg-red-100 text-red-800",
+    outline: "border border-gray-300 text-gray-700"
+  };
+  
+  return (
+    <span className={`${baseClasses} ${variantClasses[variant]} ${className}`}>
+      {children}
+    </span>
+  );
+};
+
+// Basic Card Components
+const Card = ({ children, className = "", onClick }: { 
+  children: React.ReactNode; 
+  className?: string;
+  onClick?: () => void;
+}) => (
+  <div className={`bg-white border border-gray-200 rounded-lg shadow-sm ${className}`} onClick={onClick}>
+    {children}
+  </div>
+);
+
+const CardHeader = ({ children, className = "" }: { children: React.ReactNode; className?: string }) => (
+  <div className={`px-4 py-3 ${className}`}>{children}</div>
+);
+
+const CardContent = ({ children, className = "" }: { children: React.ReactNode; className?: string }) => (
+  <div className={`px-4 pb-4 ${className}`}>{children}</div>
+);
+
+const CardTitle = ({ children, className = "" }: { children: React.ReactNode; className?: string }) => (
+  <h3 className={`font-medium ${className}`}>{children}</h3>
+);
+
+const CardDescription = ({ children, className = "" }: { children: React.ReactNode; className?: string }) => (
+  <p className={`text-gray-600 ${className}`}>{children}</p>
+);
+
 // Available models
 const models = [
   { id: "gpt-4o", name: "GPT-4o" },
   { id: "claude-opus-4-20250514", name: "Claude 4 Opus" },
 ];
+
+// Artifact type icons and labels mapping
+const getArtifactInfo = (type: string) => {
+  switch (type) {
+    case "operating_env_list":
+      return { icon: <FileTextIcon className="h-4 w-4" />, label: "Operating Environment List", color: "bg-blue-100 text-blue-800" };
+    case "requirements_classification":
+      return { icon: <FileTextIcon className="h-4 w-4" />, label: "Requirements Classification", color: "bg-green-100 text-green-800" };
+    case "system_requirements":
+      return { icon: <FileTextIcon className="h-4 w-4" />, label: "System Requirements", color: "bg-purple-100 text-purple-800" };
+    case "requirements_model":
+      return { icon: <CodeIcon className="h-4 w-4" />, label: "Requirements Model", color: "bg-orange-100 text-orange-800" };
+    case "software_requirement_specs":
+      return { icon: <FileTextIcon className="h-4 w-4" />, label: "Software Requirement Specs", color: "bg-indigo-100 text-indigo-800" };
+    case "review_document":
+      return { icon: <FileTextIcon className="h-4 w-4" />, label: "Review Document", color: "bg-red-100 text-red-800" };
+    case "validation_report":
+      return { icon: <FileTextIcon className="h-4 w-4" />, label: "Validation Report", color: "bg-yellow-100 text-yellow-800" };
+    default:
+      return { icon: <FileTextIcon className="h-4 w-4" />, label: type, color: "bg-gray-100 text-gray-800" };
+  }
+};
+
+// Format timestamp for display
+const formatTimestamp = (timestamp: string) => {
+  try {
+    return new Date(timestamp).toLocaleString();
+  } catch {
+    return timestamp;
+  }
+};
+
+// Artifact Content Viewer Component
+const ArtifactContentViewer = ({ artifact, onClose }: { artifact: ArtifactInfo & { content?: any }; onClose: () => void }) => {
+  console.log("Viewing artifact:", artifact);
+  console.log("Artifact content:", artifact.content);
+  console.log("Artifact type:", artifact.type);
+  
+  const renderContent = () => {
+    if (!artifact.content) {
+      return (
+        <div className="text-center text-gray-500 mt-8">
+          <div className="text-lg mb-2">No content available</div>
+          <div className="text-sm">
+            This artifact doesn't contain content data. 
+            <br />Check if the backend is properly serializing Pydantic models.
+          </div>
+        </div>
+      );
+    }
+
+    switch (artifact.type) {
+      case "requirements_classification":
+        const reqClass = artifact.content;
+        return (
+          <div className="space-y-4">
+            <h3 className="font-semibold text-lg">Requirements Classification</h3>
+            {reqClass.req_class_id?.map((req: any, idx: number) => (
+              <Card key={idx} className="border-l-4 border-l-blue-500">
+                <CardHeader className="pb-2">
+                  <div className="flex justify-between items-start">
+                    <CardTitle className="text-sm">{req.requirement_id}</CardTitle>
+                    <div className="flex gap-2">
+                      <Badge variant={req.priority === 'High' ? 'destructive' : req.priority === 'Medium' ? 'default' : 'secondary'}>
+                        {req.priority}
+                      </Badge>
+                      <Badge variant="outline">{req.category}</Badge>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm text-gray-700">{req.requirement_text}</p>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        );
+
+      case "system_requirements":
+        const sysReq = artifact.content;
+        return (
+          <div className="space-y-4">
+            <h3 className="font-semibold text-lg">System Requirements List</h3>
+            {sysReq.srl?.map((req: any, idx: number) => (
+              <Card key={idx} className="border-l-4 border-l-purple-500">
+                <CardHeader className="pb-2">
+                  <div className="flex justify-between items-start">
+                    <CardTitle className="text-sm">{req.requirement_id}</CardTitle>
+                    <div className="flex gap-2">
+                      <Badge variant={req.priority === 'High' ? 'destructive' : req.priority === 'Medium' ? 'default' : 'secondary'}>
+                        {req.priority}
+                      </Badge>
+                      <Badge variant="outline">{req.category}</Badge>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm text-gray-700">{req.requirement_statement}</p>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        );
+
+      case "requirements_model":
+        const model = typeof artifact.content === 'string' ? artifact.content : JSON.stringify(artifact.content, null, 2);
+        return (
+          <div className="space-y-4">
+            <h3 className="font-semibold text-lg">Requirements Model (UML)</h3>
+            <Card>
+              <CardContent className="pt-4">
+                <pre className="text-xs bg-gray-50 p-4 rounded overflow-x-auto whitespace-pre-wrap font-mono">
+                  {model}
+                </pre>
+              </CardContent>
+            </Card>
+          </div>
+        );
+
+      case "software_requirement_specs":
+        const specs = artifact.content;
+        return (
+          <div className="space-y-4">
+            <h3 className="font-semibold text-lg">Software Requirement Specifications</h3>
+            
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-sm">Brief Introduction</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-sm text-gray-700">{specs.brief_introduction}</p>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-sm">Product Description</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-sm text-gray-700">{specs.product_description}</p>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-sm">Functional Requirements</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-sm text-gray-700 whitespace-pre-wrap">{specs.functional_requirements}</div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-sm">Non-Functional Requirements</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-sm text-gray-700 whitespace-pre-wrap">{specs.non_functional_requirements}</div>
+              </CardContent>
+            </Card>
+
+            {specs.references && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-sm">References</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-sm text-gray-700 whitespace-pre-wrap">{specs.references}</div>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        );
+
+      default:
+        const content = typeof artifact.content === 'string' 
+          ? artifact.content 
+          : JSON.stringify(artifact.content, null, 2);
+        return (
+          <div className="space-y-4">
+            <h3 className="font-semibold text-lg">Artifact Content</h3>
+            <Card>
+              <CardContent className="pt-4">
+                <pre className="text-xs bg-gray-50 p-4 rounded overflow-x-auto whitespace-pre-wrap">
+                  {content}
+                </pre>
+              </CardContent>
+            </Card>
+          </div>
+        );
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg shadow-xl w-11/12 h-5/6 flex flex-col">
+        <div className="flex justify-between items-center p-4 border-b">
+          <div className="flex items-center space-x-2">
+            {getArtifactInfo(artifact.type).icon}
+            <h2 className="text-lg font-semibold">{getArtifactInfo(artifact.type).label}</h2>
+          </div>
+          <Button variant="ghost" size="sm" onClick={onClose} className="text-white hover:text-gray-200">
+            ✕
+          </Button>
+        </div>
+        
+        <div className="flex-1 overflow-y-auto p-4">
+          {renderContent()}
+        </div>
+        
+        <div className="border-t p-4 flex justify-between items-center">
+          <div className="text-sm text-white">
+            Created by {artifact.agent} • {formatTimestamp(artifact.timestamp)}
+          </div>
+          <Button variant="outline" size="sm">
+            <DownloadIcon className="h-3 w-3 mr-1" />
+            Export
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Artifact Card Component
+const ArtifactCard = ({ artifact, onClick }: { artifact: ArtifactInfo; onClick: () => void }) => {
+  const artifactInfo = getArtifactInfo(artifact.type);
+  
+  return (
+    <Card className="mb-3 hover:shadow-md transition-shadow cursor-pointer" onClick={onClick}>
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-2">
+            {artifactInfo.icon}
+            <CardTitle className="text-sm">{artifactInfo.label}</CardTitle>
+          </div>
+          <div className="flex gap-2">
+            <Badge variant={artifact.status === 'completed' ? 'default' : 'secondary'}>
+              {artifact.status}
+            </Badge>
+            <Badge className={artifactInfo.color} variant="secondary">
+              {artifact.version}
+            </Badge>
+          </div>
+        </div>
+        <CardDescription className="text-xs whitespace-normal break-words">
+          Created by {artifact.agent} • {formatTimestamp(artifact.timestamp)}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="pt-0">
+        <div className="space-y-2">
+          <div className="text-xs text-gray-600 whitespace-normal break-words">
+            ID: {artifact.id}
+          </div>
+          <div className="flex space-x-2">
+            <Button size="sm" className="h-7 text-xs flex-1 bg-gray-200 hover:bg-gray-300 text-white border-gray-300">
+              <EyeIcon className="h-3 w-3 mr-1" />
+              View Content
+            </Button>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+};
 
 const InputDemo = () => {
   // UI-specific state
@@ -36,6 +349,7 @@ const InputDemo = () => {
   const [model, setModel] = useState<string>(models[0].id);
   const [feedbackText, setFeedbackText] = useState<string>("");
   const [showFeedbackInput, setShowFeedbackInput] = useState<boolean>(false);
+  const [selectedArtifact, setSelectedArtifact] = useState<ArtifactInfo | null>(null);
   
   // Current conversation state from routes.ts (now includes messages array)
   const [conversationState, setConversationState] = useState<ConversationState | null>(null);
@@ -44,6 +358,7 @@ const InputDemo = () => {
   const handleStateUpdate = (newState: ConversationState) => {
     console.log("State update received:", newState);
     console.log("Messages in state:", newState.messages);
+    console.log("Artifacts in state:", newState.artifacts);
     setConversationState(newState);
   };
 
@@ -112,6 +427,30 @@ const InputDemo = () => {
 
     return grouped;
   }, [conversationState]);
+
+  // Sort artifacts with latest at top (reverse chronological)
+  const sortedArtifacts = useMemo(() => {
+    if (!conversationState?.artifacts) return [];
+    return [...conversationState.artifacts].sort((a, b) => 
+      new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    );
+  }, [conversationState?.artifacts]);
+
+  // Handle artifact click - fetch content and show viewer
+  const handleArtifactClick = async (artifact: ArtifactInfo) => {
+    if (!artifact.content) {
+      try {
+        const content = await fetchArtifactContent(artifact.id);
+        setSelectedArtifact({ ...artifact, content });
+      } catch (error) {
+        console.error("Failed to fetch artifact content:", error);
+        // Show artifact without content
+        setSelectedArtifact(artifact);
+      }
+    } else {
+      setSelectedArtifact(artifact);
+    }
+  };
 
   // User enters and submit the chat input text
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -208,160 +547,200 @@ const InputDemo = () => {
   const isLoading = conversationState?.isStreaming || false;
 
   return (
-    <div className="fixed left-10 top-10 right-10 w-full sm:w-1/2 rounded-lg border h-[90vh] py-6 px-4 flex flex-col">
-      <div className="flex-grow overflow-y-auto">
-        <Conversation>
-          <ConversationContent>
-            {/* Render grouped messages */}
-            {groupedMessages.map((group, groupIdx) => (
-              <Message from={group.role} key={groupIdx}>
-                <MessageContent>
-                  <div className="font-bold text-sm text-gray-600 mb-2">
-                    {group.agent}
-                  </div>
-                  <div className="space-y-2">
-                    {group.messages.map((msg, msgIdx) => (
-                      <Response 
-                        key={msgIdx}
-                        className={!msg.isComplete ? "opacity-70" : ""}
-                      >
-                        {msg.text}
-                      </Response>
-                    ))}
-                  </div>
-                </MessageContent>
-              </Message>
-            ))}
-            
-            {/* Show thread ID for debugging */}
-            {conversationState?.threadId && (
-              <div className="mt-2 text-sm text-gray-500">
-                Thread ID: {conversationState.threadId}
-              </div>
-            )}
+    <div className="fixed inset-4 flex gap-4">
+      {/* Chat Panel - Left Side */}
+      <div className="flex-1 rounded-lg border h-full py-6 px-4 flex flex-col">
+        <div className="flex-grow overflow-y-auto">
+          <Conversation>
+            <ConversationContent>
+              {/* Render grouped messages */}
+              {groupedMessages.map((group, groupIdx) => (
+                <Message from={group.role} key={groupIdx}>
+                  <MessageContent>
+                    <div className="font-bold text-sm text-gray-600 mb-2">
+                      {group.agent}
+                    </div>
+                    <div className="space-y-2">
+                      {group.messages.map((msg, msgIdx) => (
+                        <Response 
+                          key={msgIdx}
+                          className={!msg.isComplete ? "opacity-70" : ""}
+                        >
+                          {msg.text}
+                        </Response>
+                      ))}
+                    </div>
+                  </MessageContent>
+                </Message>
+              ))}
+              
+              {/* Show thread ID for debugging */}
+              {conversationState?.threadId && (
+                <div className="mt-2 text-sm text-gray-500">
+                  Thread ID: {conversationState.threadId}
+                </div>
+              )}
 
-            {/* Show error if any */}
-            {conversationState?.error && (
-              <div className="mt-2 text-sm text-red-500">
-                Error: {conversationState.error}
-              </div>
-            )}
-          </ConversationContent>
-          <ConversationScrollButton />
-        </Conversation>
-      </div>
-
-      {/* Conditional UI based on conversation state */}
-      {showRoutingChoice ? (
-        // Show routing choice buttons
-        <div className="mt-auto">
-          <div className="flex justify-center items-center">
-            <div className="bg-grey-100 rounded-lg p-6 w-full flex flex-col items-center max-w-lg">
-              <div className="text-center mb-4">
-                <p className="text-xl mb-4">Choose the next action:</p>
-              </div>
-              <div className="grid grid-cols-1 gap-2 w-full">
-                {conversationState.availableChoices?.map((choice) => (
-                  <Button
-                    key={choice.value}
-                    onClick={() => handleRoutingChoice(choice.value)}
-                    className="w-full text-left justify-start"
-                    variant="outline"
-                  >
-                    {choice.label}
-                  </Button>
-                ))}
-              </div>
-            </div>
-          </div>
+              {/* Show error if any */}
+              {conversationState?.error && (
+                <div className="mt-2 text-sm text-red-500">
+                  Error: {conversationState.error}
+                </div>
+              )}
+            </ConversationContent>
+            <ConversationScrollButton />
+          </Conversation>
         </div>
-      ) : showFeedbackButtons ? (
-        // Show feedback buttons (existing logic)
-        <div className="mt-auto">
-          {!showFeedbackInput ? (
-            // Show approve/feedback buttons
+
+        {/* Conditional UI based on conversation state */}
+        {showRoutingChoice ? (
+          // Show routing choice buttons
+          <div className="mt-auto">
             <div className="flex justify-center items-center">
-              <div className="bg-grey-100 rounded-lg p-6 w-full flex justify-center max-w-sm sm:max-w-md lg:max-w-lg">
-                <div className="text-center">
-                  <p className="mb-4 text-xl">
-                    Do you approve the provided feedback?
-                  </p>
-                  <Button onClick={handleApprove} className="mr-4">
-                    Approve
-                  </Button>
-                  <Button onClick={() => setShowFeedbackInput(true)}>
-                    Provide Feedback
-                  </Button>
+              <div className="bg-grey-100 rounded-lg p-6 w-full flex flex-col items-center max-w-lg">
+                <div className="text-center mb-4">
+                  <p className="text-xl mb-4">Choose the next action:</p>
+                </div>
+                <div className="grid grid-cols-1 gap-2 w-full">
+                  {conversationState.availableChoices?.map((choice) => (
+                    <Button
+                      key={choice.value}
+                      onClick={() => handleRoutingChoice(choice.value)}
+                      className="w-full text-left justify-start bg-gray-200 hover:bg-gray-300 text-white border-gray-300"
+                    >
+                      {choice.label}
+                    </Button>
+                  ))}
                 </div>
               </div>
             </div>
-          ) : (
-            // Show feedback input
-            <div>
-              <PromptInput>
-                <PromptInputTextarea
-                  onChange={(e) => setFeedbackText(e.target.value)}
-                  value={feedbackText}
-                  placeholder="Enter your feedback"
-                  className="w-full py-2 px-4 border rounded-md"
-                />
-              </PromptInput>
-              <div className="flex gap-2 mt-2">
-                <Button onClick={handleFeedback} disabled={!feedbackText.trim()}>
-                  Send Feedback
-                </Button>
-                <Button 
-                  variant="outline" 
-                  onClick={() => {
-                    setShowFeedbackInput(false);
-                    setFeedbackText("");
-                  }}
-                >
-                  Cancel
-                </Button>
+          </div>
+        ) : showFeedbackButtons ? (
+          // Show feedback buttons (existing logic)
+          <div className="mt-auto">
+            {!showFeedbackInput ? (
+              // Show approve/feedback buttons
+              <div className="flex justify-center items-center">
+                <div className="bg-grey-100 rounded-lg p-6 w-full flex justify-center max-w-sm sm:max-w-md lg:max-w-lg">
+                  <div className="text-center">
+                    <p className="mb-4 text-xl">
+                      Do you approve the provided feedback?
+                    </p>
+                    <Button onClick={handleApprove} className="mr-4">
+                      Approve
+                    </Button>
+                    <Button onClick={() => setShowFeedbackInput(true)}>
+                      Provide Feedback
+                    </Button>
+                  </div>
+                </div>
               </div>
+            ) : (
+              // Show feedback input
+              <div>
+                <PromptInput>
+                  <PromptInputTextarea
+                    onChange={(e) => setFeedbackText(e.target.value)}
+                    value={feedbackText}
+                    placeholder="Enter your feedback"
+                    className="w-full py-2 px-4 border rounded-md"
+                  />
+                </PromptInput>
+                <div className="flex gap-2 mt-2">
+                  <Button onClick={handleFeedback} disabled={!feedbackText.trim()}>
+                    Send Feedback
+                  </Button>
+                  <Button 
+                    variant="outline" 
+                    onClick={() => {
+                      setShowFeedbackInput(false);
+                      setFeedbackText("");
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          // Show normal chat input
+          <div className="mt-auto">
+            <PromptInput onSubmit={handleSubmit}>
+              <PromptInputTextarea
+                onChange={(e) => setInputText(e.target.value)}
+                value={inputText}
+                className="w-full py-2 px-4 border rounded-md"
+                disabled={isLoading}
+              />
+              <PromptInputToolbar>
+                <PromptInputTools>
+                  <PromptInputButton>
+                    <MicIcon size={16} />
+                  </PromptInputButton>
+                  <PromptInputButton>
+                    <GlobeIcon size={16} />
+                    <span>Search</span>
+                  </PromptInputButton>
+                  <PromptInputModelSelect
+                    onValueChange={(value) => setModel(value)}
+                    value={model}
+                  >
+                    <PromptInputModelSelectTrigger>
+                      <PromptInputModelSelectValue />
+                    </PromptInputModelSelectTrigger>
+                    <PromptInputModelSelectContent>
+                      {models.map((m) => (
+                        <PromptInputModelSelectItem key={m.id} value={m.id}>
+                          {m.name}
+                        </PromptInputModelSelectItem>
+                      ))}
+                    </PromptInputModelSelectContent>
+                  </PromptInputModelSelect>
+                </PromptInputTools>
+                <PromptInputSubmit disabled={!inputText.trim() || isLoading} />
+              </PromptInputToolbar>
+            </PromptInput>
+          </div>
+        )}
+      </div>
+
+      {/* Artifacts Panel - Right Side */}
+      <div className="w-80 rounded-lg border h-full flex flex-col">
+        <div className="p-4 border-b">
+          <h3 className="text-lg font-semibold">Artifacts</h3>
+          <p className="text-sm text-gray-600">
+            {sortedArtifacts.length} artifact{sortedArtifacts.length !== 1 ? 's' : ''}
+          </p>
+        </div>
+        
+        <div className="flex-1 overflow-y-auto p-4">
+          {sortedArtifacts.length === 0 ? (
+            <div className="text-center text-gray-500 mt-8">
+              <FileTextIcon className="h-12 w-12 mx-auto mb-2 opacity-50" />
+              <p>No artifacts yet</p>
+              <p className="text-xs mt-1">Artifacts will appear here as they are created</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {sortedArtifacts.map((artifact, idx) => (
+                <ArtifactCard 
+                  key={`${artifact.id}-${idx}`} 
+                  artifact={artifact} 
+                  onClick={() => handleArtifactClick(artifact)}
+                />
+              ))}
             </div>
           )}
         </div>
-      ) : (
-        // Show normal chat input
-        <div className="mt-auto">
-          <PromptInput onSubmit={handleSubmit}>
-            <PromptInputTextarea
-              onChange={(e) => setInputText(e.target.value)}
-              value={inputText}
-              className="w-full py-2 px-4 border rounded-md"
-              disabled={isLoading}
-            />
-            <PromptInputToolbar>
-              <PromptInputTools>
-                <PromptInputButton>
-                  <MicIcon size={16} />
-                </PromptInputButton>
-                <PromptInputButton>
-                  <GlobeIcon size={16} />
-                  <span>Search</span>
-                </PromptInputButton>
-                <PromptInputModelSelect
-                  onValueChange={(value) => setModel(value)}
-                  value={model}
-                >
-                  <PromptInputModelSelectTrigger>
-                    <PromptInputModelSelectValue />
-                  </PromptInputModelSelectTrigger>
-                  <PromptInputModelSelectContent>
-                    {models.map((m) => (
-                      <PromptInputModelSelectItem key={m.id} value={m.id}>
-                        {m.name}
-                      </PromptInputModelSelectItem>
-                    ))}
-                  </PromptInputModelSelectContent>
-                </PromptInputModelSelect>
-              </PromptInputTools>
-              <PromptInputSubmit disabled={!inputText.trim() || isLoading} />
-            </PromptInputToolbar>
-          </PromptInput>
-        </div>
+      </div>
+
+      {/* Artifact Content Viewer Modal */}
+      {selectedArtifact && (
+        <ArtifactContentViewer 
+          artifact={selectedArtifact} 
+          onClose={() => setSelectedArtifact(null)} 
+        />
       )}
     </div>
   );
