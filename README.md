@@ -1,15 +1,39 @@
-To test code: 
+## To test code: 
+
+
 cd FYP_secondhalf
+
+
 create virtual environment 
+
+
 .\venv\Scripts\activate
-[For backend]: 
+
+
+### [For backend]: 
+
+
 cd langgraph_app\src
+
+
 uvicorn main:app
-[For frontend]: 
+
+
+### [For frontend]: 
+
+
 cd langgraph_app\src\frontend
+
+
 npm run dev
+
+
 [Optional]: If npm run dev is not successful, please run `npm install` first
+
+
 Check if http://localhost:5173/ pops up in terminal, 
+
+
 run `http://localhost:5173/chat` on browser
 
 
