@@ -1,26 +1,11 @@
-from typing import Literal, List
+from typing import Literal, List, Optional
 from enum import Enum
 from pydantic import BaseModel, Field 
 
 from .shared import *
 
-class RMRequirement(BaseModel):
-    requirement_id: str
-    requirement_text: str
-    category: RequirementCategory
-    priority: RequirementPriority
+class RequirementModel(BaseModel):
+    diagram_base64: Optional[str] = None
+    diagram_path: Optional[str] = None
+    uml_fmt_content: Optional[str] = None
 
-class RMEntity(BaseModel):
-    entity_id: str
-    name: str
-    type: str
-
-class RMRelationship(BaseModel):
-    source_id: str
-    target_id: str
-    type: str
-
-class RequirementsModel(BaseModel):
-    entities: List[RMEntity]
-    requirements: List[RMRequirement]
-    relationships: List[RMRelationship]

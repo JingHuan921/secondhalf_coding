@@ -1,6 +1,6 @@
 // Chat.tsx - WITH ARTIFACT DISPLAY PANEL (FIXED)
 import { useState, useMemo } from "react";
-import { sendUserPrompt, resumeStream, sendRoutingChoice, fetchArtifactContent, ROUTING_CHOICES, type ConversationState, type ConversationMessage, type ArtifactInfo } from "../api/chat/routes";
+import { sendUserPrompt, resumeStream, sendRoutingChoice, ROUTING_CHOICES, type ConversationState, type ConversationMessage, type ArtifactInfo } from "../api/chat/routes";
 import {
   PromptInput,
   PromptInputButton,
@@ -182,17 +182,68 @@ const ArtifactContentViewer = ({ artifact, onClose }: { artifact: ArtifactInfo &
         );
 
       case "requirements_model":
-        const model = typeof artifact.content === 'string' ? artifact.content : JSON.stringify(artifact.content, null, 2);
+        const model = artifact.content;
+        console.log("Requirements model artifact content:", model);
+        console.log("Has diagram_base64:", !!model?.diagram_base64);
+        console.log("Diagram base64 length:", model?.diagram_base64?.length);
+        
         return (
           <div className="space-y-4">
-            <h3 className="font-semibold text-lg">Requirements Model (UML)</h3>
-            <Card>
-              <CardContent className="pt-4">
-                <pre className="text-xs bg-gray-50 p-4 rounded overflow-x-auto whitespace-pre-wrap font-mono">
-                  {model}
-                </pre>
-              </CardContent>
-            </Card>
+            <h3 className="font-semibold text-lg">Requirements Model</h3>
+            
+            {/* Display generated diagram if available */}
+            {model?.diagram_base64 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-sm">Generated Use Case Diagram</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="border rounded-lg p-4 bg-white">
+                    <img 
+                      src={`data:image/png;base64,${model.diagram_base64}`}
+                      alt="Requirements Use Case Diagram"
+                      className="max-w-full h-auto mx-auto"
+                      style={{ maxHeight: '600px' }}
+                      onLoad={() => console.log("Image loaded successfully")}
+                      onError={(e) => console.error("Image load error:", e)}
+                    />
+                  </div>
+                  {model.diagram_generation_message && (
+                    <p className="text-xs text-gray-600 mt-2">
+                      {model.diagram_generation_message}
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+            
+            {/* Display UML Code */}
+            {model?.uml_fmt_content && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-sm">PlantUML Code</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <pre className="text-xs bg-gray-50 p-4 rounded overflow-x-auto whitespace-pre-wrap font-mono">
+                    {model.uml_fmt_content}
+                  </pre>
+                </CardContent>
+              </Card>
+            )}
+            
+            {/* Fallback: display raw content if structure is different */}
+            {!model?.uml_fmt_content && !model?.diagram_base64 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-sm">Content (Fallback)</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <pre className="text-xs bg-gray-50 p-4 rounded overflow-x-auto whitespace-pre-wrap font-mono">
+                    {typeof artifact.content === 'string' ? artifact.content : JSON.stringify(artifact.content, null, 2)}
+                  </pre>
+                </CardContent>
+              </Card>
+            )}
           </div>
         );
 
@@ -288,7 +339,7 @@ const ArtifactContentViewer = ({ artifact, onClose }: { artifact: ArtifactInfo &
         </div>
         
         <div className="border-t p-4 flex justify-between items-center">
-          <div className="text-sm text-white">
+          <div className="text-sm text-gray-600">
             Created by {artifact.agent} • {formatTimestamp(artifact.timestamp)}
           </div>
           <Button variant="outline" size="sm">
@@ -305,6 +356,12 @@ const ArtifactContentViewer = ({ artifact, onClose }: { artifact: ArtifactInfo &
 const ArtifactCard = ({ artifact, onClick }: { artifact: ArtifactInfo; onClick: () => void }) => {
   const artifactInfo = getArtifactInfo(artifact.type);
   
+  // Check if this is a requirements model with a diagram
+  const hasDiagram = artifact.type === "requirements_model" && 
+                    artifact.content && 
+                    typeof artifact.content === 'object' && 
+                    artifact.content.diagram_base64;
+  
   return (
     <Card className="mb-3 hover:shadow-md transition-shadow cursor-pointer" onClick={onClick}>
       <CardHeader className="pb-2">
@@ -312,6 +369,11 @@ const ArtifactCard = ({ artifact, onClick }: { artifact: ArtifactInfo; onClick: 
           <div className="flex items-center space-x-2">
             {artifactInfo.icon}
             <CardTitle className="text-sm">{artifactInfo.label}</CardTitle>
+            {hasDiagram && (
+              <div title="Contains generated diagram">
+                <ImageIcon className="h-3 w-3 text-green-600" />
+              </div>
+            )}
           </div>
           <div className="flex gap-2">
             <Badge variant={artifact.status === 'completed' ? 'default' : 'secondary'}>
@@ -322,19 +384,24 @@ const ArtifactCard = ({ artifact, onClick }: { artifact: ArtifactInfo; onClick: 
             </Badge>
           </div>
         </div>
-        <CardDescription className="text-xs whitespace-normal break-words">
+        <CardDescription className="text-xs">
           Created by {artifact.agent} • {formatTimestamp(artifact.timestamp)}
         </CardDescription>
       </CardHeader>
       <CardContent className="pt-0">
         <div className="space-y-2">
-          <div className="text-xs text-gray-600 whitespace-normal break-words">
+          <div className="text-xs text-gray-600 truncate">
             ID: {artifact.id}
           </div>
+          {hasDiagram && (
+            <div className="text-xs text-green-600">
+              📊 Includes generated diagram
+            </div>
+          )}
           <div className="flex space-x-2">
-            <Button size="sm" className="h-7 text-xs flex-1 bg-gray-200 hover:bg-gray-300 text-white border-gray-300">
+            <Button size="sm" className="h-7 text-xs flex-1 bg-gray-100 hover:bg-gray-200 text-gray-900 border border-gray-300 font-medium">
               <EyeIcon className="h-3 w-3 mr-1" />
-              View Content
+              {hasDiagram ? "View Diagram & Code" : "View Content"}
             </Button>
           </div>
         </div>
@@ -436,20 +503,9 @@ const InputDemo = () => {
     );
   }, [conversationState?.artifacts]);
 
-  // Handle artifact click - fetch content and show viewer
-  const handleArtifactClick = async (artifact: ArtifactInfo) => {
-    if (!artifact.content) {
-      try {
-        const content = await fetchArtifactContent(artifact.id);
-        setSelectedArtifact({ ...artifact, content });
-      } catch (error) {
-        console.error("Failed to fetch artifact content:", error);
-        // Show artifact without content
-        setSelectedArtifact(artifact);
-      }
-    } else {
-      setSelectedArtifact(artifact);
-    }
+  // Handle artifact click - show viewer directly since content is always available
+  const handleArtifactClick = (artifact: ArtifactInfo) => {
+    setSelectedArtifact(artifact);
   };
 
   // User enters and submit the chat input text
@@ -606,7 +662,7 @@ const InputDemo = () => {
                     <Button
                       key={choice.value}
                       onClick={() => handleRoutingChoice(choice.value)}
-                      className="w-full text-left justify-start bg-gray-200 hover:bg-gray-300 text-white border-gray-300"
+                      className="w-full text-left justify-start bg-gray-100 hover:bg-gray-200 text-gray-900 border border-gray-300 font-medium"
                     >
                       {choice.label}
                     </Button>

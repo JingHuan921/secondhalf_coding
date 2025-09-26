@@ -279,7 +279,6 @@ function streamAssistantResponse(
         });
       }
 
-
       // Handle routing decisions
       if (data.chat_type === "routing_decision" && data.content) {
         console.log(`Routing decision: ${data.content}`);
@@ -298,7 +297,7 @@ function streamAssistantResponse(
 
           routingMessage = `Now routing to: ${choice.label}`;
         }
-
+        
         // ADD MESSAGE TO ACCUMULATION instead of overwriting
         addMessage({
           role: "assistant",
@@ -515,30 +514,10 @@ async function sendRoutingChoice(
   }
 }
 
-// Function to fetch artifact content by ID
-async function fetchArtifactContent(artifactId: string): Promise<any> {
-  try {
-    const response = await fetch(`http://localhost:8000/artifacts/${artifactId}`, {
-      method: "GET",
-      headers: { "Content-Type": "application/json" }
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch artifact: ${response.status}`);
-    }
-
-    return await response.json();
-  } catch (error) {
-    console.error("Error fetching artifact content:", error);
-    throw error;
-  }
-}
-
 export { 
   sendUserPrompt, 
   resumeStream, 
   sendRoutingChoice,
-  fetchArtifactContent,
   ROUTING_CHOICES,
   type ConversationState, 
   type ConversationMessage, 

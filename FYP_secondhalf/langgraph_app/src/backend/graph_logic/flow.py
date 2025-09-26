@@ -9,6 +9,7 @@ from operator import add
 import time
 import logging
 import sys
+import base64
 
 def setup_minimal_logging():
     """Setup minimal logging - suppress all LangGraph server noise"""
@@ -71,7 +72,7 @@ from backend.graph_logic.state import (
     create_artifact, create_conversation, add_artifacts, add_conversations, 
      _get_latest_version, _increment_version, _create_versioned_artifact
 )
-from backend.artifact_model import RequirementsClassificationList, SystemRequirementsList, RequirementsModel, SoftwareRequirementSpecs
+from backend.artifact_model import RequirementsClassificationList, SystemRequirementsList, RequirementModel, SoftwareRequirementSpecs
 
 from pydantic import BaseModel
 
@@ -228,31 +229,59 @@ async def write_system_requirement(state: ArtifactState) -> ArtifactState:
             "errors": [f"Classification failed: {str(e)}"]
         }
     
-async def generate_use_case_diagram(uml_code: str) -> str:
+async def generate_use_case_diagram(uml_code: str) -> dict:
     """
-    Generate a use case diagram from PlantUML code
+    Generate a use case diagram from PlantUML code and return both path and base64 data
 
     Args:
         uml_code: The PlantUML code to generate diagram from
-        output_location: Optional base directory for output (defaults to script parent directory)
 
     Returns:
-        Path to the generated diagram file or error message
+        Dict containing path, base64_data, and success status
     """
     try:
         logger.debug(f"DEBUG: generate_use_case_diagram started")
-        result = await generate_plantuml_local(uml_code=uml_code)  # <-- await here
+        result = await generate_plantuml_local(uml_code=uml_code)
+        
         if result:
-            return f"Use case diagram generated successfully at: {result}"
+            # Read the generated PNG file and convert to base64
+            try:
+                with open(result, 'rb') as image_file:
+                    image_data = image_file.read()
+                    base64_data = base64.b64encode(image_data).decode('utf-8')
+                    
+                return {
+                    "success": True,
+                    "path": result,
+                    "base64_data": base64_data,
+                    "message": f"Use case diagram generated successfully at: {result}"
+                }
+            except Exception as e:
+                logger.error(f"Error reading generated image: {str(e)}")
+                return {
+                    "success": False,
+                    "path": result,
+                    "base64_data": None,
+                    "message": f"Diagram generated but failed to read image data: {str(e)}"
+                }
         else:
-            return f"Failed to generate use case diagram. Check PlantUML installation and code syntax."
-        
+            return {
+                "success": False,
+                "path": None,
+                "base64_data": None,
+                "message": "Failed to generate use case diagram. Check PlantUML installation and code syntax."
+            }
+            
     except Exception as e:
-        return f"Error generating diagram: {str(e)}"
-        
+        return {
+            "success": False,
+            "path": None,
+            "base64_data": None,
+            "message": f"Error generating diagram: {str(e)}"
+        }
+
 async def build_requirement_model(state: ArtifactState) -> ArtifactState:
     logger.debug("DEBUG: build_requirement_model function started")
-    
     
     try:
         logger.debug("DEBUG: Attempting to load 'build_req_model' prompt from library")
@@ -261,6 +290,7 @@ async def build_requirement_model(state: ArtifactState) -> ArtifactState:
         if not system_prompt:
             logger.debug("ERROR: Missing 'build_req_model' prompt in prompt library")
             raise ValueError("Missing 'build_req_model' prompt in prompt library.")
+            
         # Get the LLM response
         logger.debug("DEBUG: Invoking LLM for requirement model generation")
         response = await llm.ainvoke([
@@ -271,6 +301,7 @@ async def build_requirement_model(state: ArtifactState) -> ArtifactState:
         
         # Extract PlantUML code from the response
         uml_chunk = None
+        diagram_result = None
         diagram_generation_message = "No PlantUML code found in response."
         
         if hasattr(response, 'content') and response.content:
@@ -283,10 +314,8 @@ async def build_requirement_model(state: ArtifactState) -> ArtifactState:
                 
                 # Generate the diagram using the tool
                 logger.debug("DEBUG: Attempting to generate use case diagram")
-                diagram_result = await generate_use_case_diagram(
-                    uml_code = uml_chunk
-                )
-                diagram_generation_message = diagram_result
+                diagram_result = await generate_use_case_diagram(uml_code=uml_chunk)
+                diagram_generation_message = diagram_result["message"]
                 logger.debug(f"DEBUG: Diagram generation completed: {diagram_generation_message}")
                 
             except ValueError as ve:
@@ -300,32 +329,36 @@ async def build_requirement_model(state: ArtifactState) -> ArtifactState:
                 diagram_generation_message = f"Error generating diagram: {str(e)}"
         else:
             logger.debug("DEBUG: LLM response has no content or content attribute missing")
-        
-        # Create final response - return the UML chunk if found, otherwise original response
-        if uml_chunk:
-            logger.debug("DEBUG: Using UML chunk as final response content")
-            final_response_content = uml_chunk
-            logger.debug(f"DEBUG: Diagram generation result: {diagram_generation_message}")
-        else:
-            logger.debug("DEBUG: No UML found, using original LLM response as final content")
-            final_response_content = response.content if hasattr(response, 'content') else str(response)
-            logger.debug(f"DEBUG: No UML extracted: {diagram_generation_message}")
+
+        if diagram_result and diagram_result["success"] and diagram_result["base64_data"]:
+
+            artifact_content = RequirementModel(
+                diagram_base64 = diagram_result["base64_data"],
+                diagram_path = diagram_result["path"],
+                uml_fmt_content = uml_chunk
+            )
+
+            logger.debug(f"DEBUG: Added base64 data to artifact content, length: {len(diagram_result['base64_data'])}")
         
         logger.debug("DEBUG: Creating artifact and conversation objects")
         
-        # Create artifact using factory function
+        # Create artifact using factory function with structured content (ONLY ONCE!)
         artifact = create_artifact(
             agent=AgentType.ANALYST,
             artifact_type=ArtifactType.REQ_MODEL,
-            content=final_response_content,  
+            content=artifact_content,  # Use the dict, not Pydantic model
         )
         logger.debug(f"DEBUG: Artifact created with ID: {artifact.id}")
         
-        # Create conversation entry
+        # Create conversation entry - use the generation message for display
+        conversation_content = f"Requirements model generated. {diagram_generation_message}"
+        if uml_chunk:
+            conversation_content += "\n\nUML Code:\n" + uml_chunk[:200] + ("..." if len(uml_chunk) > 200 else "")
+        
         conversation = create_conversation(
             agent=AgentType.ANALYST,
             artifact_id=artifact.id,
-            content=final_response_content,
+            content=conversation_content,
         )
         logger.debug(f"DEBUG: Conversation entry created for artifact: {artifact.id}")
 

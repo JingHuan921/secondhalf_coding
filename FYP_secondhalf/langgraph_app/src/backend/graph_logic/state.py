@@ -12,7 +12,7 @@ from langgraph.graph import MessagesState
 from backend.artifact_model import (
     RequirementsClassificationList,
     SystemRequirementsList,
-    RequirementsModel,
+    RequirementModel,
     SoftwareRequirementSpecs
 )
 
@@ -43,7 +43,7 @@ class ArtifactType(str, Enum):
 class Artifact(BaseModel):
     """Response artifact for each workflow step"""
     id: str
-    content: Optional[Union[RequirementsClassificationList, SystemRequirementsList, RequirementsModel, SoftwareRequirementSpecs, str]] = None
+    content: Optional[Union[RequirementsClassificationList, SystemRequirementsList, RequirementModel, SoftwareRequirementSpecs, str]] = None
     content_type: ArtifactType
     content_nature: Optional[str] = None #no use, for the sake of integratig
     created_by: AgentType
@@ -193,7 +193,7 @@ def _create_versioned_artifact(original_artifact: Artifact, new_version: str) ->
     
     # Create new artifact with updated metadata but same content
     return Artifact(
-        id=f"{original_artifact.content_type.value}_{original_artifact.created_by.value}_v{new_version.replace('.', '-')}",  # Unique ID with version
+        id=f"{original_artifact.content_type.value}_{original_artifact.created_by.value}_v{new_version}",  # Unique ID with version
         content_type=original_artifact.content_type,
         created_by=original_artifact.created_by,
         content=original_artifact.content,  # Same content, different version
@@ -326,13 +326,11 @@ class StateManager:
     @staticmethod
     def create_artifact_id(agent: AgentType, artifact_type: ArtifactType, version:str) -> str:
         """Generate consistent artifact ID"""
-        # Check if you're doing something like this:
-        # return f"{artifact_type.value}_{agent.value}_{version}"
         
         try:
             agent_value = agent.value if hasattr(agent, 'value') else str(agent)
             type_value = artifact_type.value if hasattr(artifact_type, 'value') else str(artifact_type)
-            return f"{type_value}_{agent_value}_{version}"
+            return f"{type_value}_{agent_value}_v{version}"
         except AttributeError as e:
             logger.error(f"Error in create_artifact_id: agent={agent}, artifact_type={artifact_type}")
             raise
@@ -350,7 +348,7 @@ class StateManager:
 def create_artifact(
     agent: AgentType,
     artifact_type: ArtifactType,
-    content: Optional[Union[RequirementsClassificationList, SystemRequirementsList, RequirementsModel, str]] = None,
+    content: Optional[Union[RequirementsClassificationList, SystemRequirementsList, RequirementModel, str]] = None,
     version: str= "1.0"
 ) -> Artifact:
     
