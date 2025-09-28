@@ -1,6 +1,6 @@
-// Chat.tsx - WITH ARTIFACT DISPLAY PANEL (FIXED)
-import { useState, useMemo } from "react";
-import { sendUserPrompt, resumeStream, sendRoutingChoice, ROUTING_CHOICES, type ConversationState, type ConversationMessage, type ArtifactInfo } from "../api/chat/routes";
+// Chat.tsx - COMPLETE FILE WITH ARTIFACT ACCEPT/FEEDBACK FEATURE
+import { useState, useMemo, useEffect } from "react";
+import { sendUserPrompt, resumeStream, sendRoutingChoice, sendArtifactFeedback, ROUTING_CHOICES, type ConversationState, type ConversationMessage, type ArtifactInfo } from "../api/chat/routes";
 import {
   PromptInput,
   PromptInputButton,
@@ -14,7 +14,7 @@ import {
   PromptInputToolbar,
   PromptInputTools,
 } from "@/components/ai-elements/prompt-input";
-import { GlobeIcon, MicIcon, FileTextIcon, CodeIcon, ImageIcon, DownloadIcon, EyeIcon } from "lucide-react";
+import { GlobeIcon, MicIcon, FileTextIcon, CodeIcon, ImageIcon, DownloadIcon, EyeIcon, CheckIcon, MessageSquareIcon } from "lucide-react";
 import {
   Conversation,
   ConversationContent,
@@ -352,8 +352,14 @@ const ArtifactContentViewer = ({ artifact, onClose }: { artifact: ArtifactInfo &
   );
 };
 
-// Artifact Card Component
-const ArtifactCard = ({ artifact, onClick }: { artifact: ArtifactInfo; onClick: () => void }) => {
+// Artifact Card Component (no Accept/Feedback buttons here)
+const ArtifactCard = ({ 
+  artifact, 
+  onClick
+}: { 
+  artifact: ArtifactInfo; 
+  onClick: () => void;
+}) => {
   const artifactInfo = getArtifactInfo(artifact.type);
   
   // Check if this is a requirements model with a diagram
@@ -399,7 +405,10 @@ const ArtifactCard = ({ artifact, onClick }: { artifact: ArtifactInfo; onClick: 
             </div>
           )}
           <div className="flex space-x-2">
-            <Button size="sm" className="h-7 text-xs flex-1 bg-gray-100 hover:bg-gray-200 text-gray-900 border border-gray-300 font-medium">
+            <Button 
+              size="sm" 
+              className="h-7 text-xs flex-1 bg-gray-100 hover:bg-gray-200 text-gray-900 border border-gray-300 font-medium"
+            >
               <EyeIcon className="h-3 w-3 mr-1" />
               {hasDiagram ? "View Diagram & Code" : "View Content"}
             </Button>
@@ -418,8 +427,25 @@ const InputDemo = () => {
   const [showFeedbackInput, setShowFeedbackInput] = useState<boolean>(false);
   const [selectedArtifact, setSelectedArtifact] = useState<ArtifactInfo | null>(null);
   
+  // Artifact feedback state
+  const [artifactFeedbackText, setArtifactFeedbackText] = useState<string>("");
+  const [showArtifactFeedbackInput, setShowArtifactFeedbackInput] = useState<boolean>(false);
+  const [pendingFeedbackArtifactId, setPendingFeedbackArtifactId] = useState<string | null>(null);
+  
   // Current conversation state from routes.ts (now includes messages array)
   const [conversationState, setConversationState] = useState<ConversationState | null>(null);
+
+
+  // ADD THIS DEBUG useEffect HERE:
+  useEffect(() => {
+    console.log("Artifacts in state changed:", conversationState?.artifacts?.map(a => ({ 
+      id: a.id, 
+      version: a.version, 
+      type: a.type,
+      timestamp: a.timestamp 
+    })));
+  }, [conversationState?.artifacts]);
+
 
   // Handle state updates from routes.ts
   const handleStateUpdate = (newState: ConversationState) => {
@@ -506,6 +532,88 @@ const InputDemo = () => {
   // Handle artifact click - show viewer directly since content is always available
   const handleArtifactClick = (artifact: ArtifactInfo) => {
     setSelectedArtifact(artifact);
+  };
+
+  // Handle artifact accept
+  const handleArtifactAccept = async (artifactId: string) => {
+    if (!conversationState?.threadId) return;
+    
+    // Add user message for accept action
+    const acceptMessage: ConversationMessage = {
+      role: "user",
+      text: `Accepted artifact: ${artifactId}`,
+      isComplete: true
+    };
+
+    const updatedState = {
+      ...conversationState,
+      messages: [...conversationState.messages, acceptMessage]
+    };
+
+    setConversationState(updatedState);
+    
+    try {
+      await sendArtifactFeedback(
+        conversationState.threadId,
+        artifactId,
+        "accept",
+        null,
+        handleStateUpdate,
+        updatedState // Pass current state to preserve it
+      );
+    } catch (error) {
+      console.error("Error accepting artifact:", error);
+    }
+  };
+
+  // Handle artifact feedback initiation
+  const handleArtifactFeedbackStart = (artifactId: string) => {
+    setPendingFeedbackArtifactId(artifactId);
+    setShowArtifactFeedbackInput(true);
+  };
+
+  // Handle artifact feedback submission
+  const handleArtifactFeedbackSubmit = async () => {
+    if (!conversationState?.threadId || !pendingFeedbackArtifactId || !artifactFeedbackText.trim()) return;
+    
+    // Add user message for feedback action
+    const feedbackMessage: ConversationMessage = {
+      role: "user",
+      text: `Feedback for artifact ${pendingFeedbackArtifactId}: ${artifactFeedbackText}`,
+      isComplete: true
+    };
+
+    const updatedState = {
+      ...conversationState,
+      messages: [...conversationState.messages, feedbackMessage]
+    };
+
+    setConversationState(updatedState);
+    
+    try {
+      await sendArtifactFeedback(
+        conversationState.threadId,
+        pendingFeedbackArtifactId,
+        "feedback",
+        artifactFeedbackText,
+        handleStateUpdate,
+        updatedState // Pass current state to preserve it
+      );
+      
+      // Clear feedback state
+      setArtifactFeedbackText("");
+      setShowArtifactFeedbackInput(false);
+      setPendingFeedbackArtifactId(null);
+    } catch (error) {
+      console.error("Error sending artifact feedback:", error);
+    }
+  };
+
+  // Cancel artifact feedback
+  const handleArtifactFeedbackCancel = () => {
+    setArtifactFeedbackText("");
+    setShowArtifactFeedbackInput(false);
+    setPendingFeedbackArtifactId(null);
   };
 
   // User enters and submit the chat input text
@@ -601,6 +709,12 @@ const InputDemo = () => {
   const showFeedbackButtons = conversationState?.requiresFeedback && !conversationState.isComplete;
   const showRoutingChoice = conversationState?.isInterrupted && conversationState.availableChoices;
   const isLoading = conversationState?.isStreaming || false;
+  
+  // Check if we should show artifact accept/feedback buttons
+  const showArtifactAcceptFeedback = Boolean(conversationState?.requiresArtifactFeedback && !conversationState.isComplete);
+  
+  // Block chat input when artifact feedback is required or being provided
+  const isChatInputBlocked = isLoading || showArtifactAcceptFeedback || showArtifactFeedbackInput;
 
   return (
     <div className="fixed inset-4 flex gap-4">
@@ -649,7 +763,78 @@ const InputDemo = () => {
         </div>
 
         {/* Conditional UI based on conversation state */}
-        {showRoutingChoice ? (
+        {showArtifactFeedbackInput ? (
+          // Show artifact feedback input in chat section
+          <div className="mt-auto">
+            <div className="flex justify-center items-center">
+              <div className="bg-grey-100 rounded-lg p-6 w-full flex flex-col items-center max-w-lg">
+                <div className="text-center mb-4">
+                  <p className="text-xl mb-4">Provide feedback for this artifact:</p>
+                  {conversationState?.pendingFeedbackArtifactId && (
+                    <p className="text-sm text-gray-600">Artifact ID: {conversationState.pendingFeedbackArtifactId}</p>
+                  )}
+                </div>
+                <div className="w-full space-y-2">
+                  <PromptInput>
+                    <PromptInputTextarea
+                      onChange={(e) => setArtifactFeedbackText(e.target.value)}
+                      value={artifactFeedbackText}
+                      placeholder="Enter your feedback about this artifact..."
+                      className="w-full py-2 px-4 border rounded-md"
+                    />
+                  </PromptInput>
+                  <div className="flex gap-2 mt-2 w-full">
+                    <Button 
+                      onClick={handleArtifactFeedbackSubmit} 
+                      disabled={!artifactFeedbackText.trim()}
+                      className="flex-1"
+                    >
+                      Send Feedback
+                    </Button>
+                    <Button 
+                      variant="outline" 
+                      onClick={handleArtifactFeedbackCancel}
+                      className="flex-1"
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : showArtifactAcceptFeedback ? (
+          // Show artifact accept/feedback buttons in chat section
+          <div className="mt-auto">
+            <div className="flex justify-center items-center">
+              <div className="bg-grey-100 rounded-lg p-6 w-full flex flex-col items-center max-w-lg">
+                <div className="text-center mb-4">
+                  <p className="text-xl mb-4">A new artifact has been generated!</p>
+                  {conversationState?.pendingFeedbackArtifactId && (
+                    <p className="text-sm text-gray-600">Artifact ID: {conversationState.pendingFeedbackArtifactId}</p>
+                  )}
+                  <p className="text-sm text-gray-700 mt-2">Do you want to accept this artifact or provide feedback for improvements?</p>
+                </div>
+                <div className="flex gap-2 w-full max-w-sm">
+                  <Button 
+                    onClick={() => handleArtifactAccept(conversationState?.pendingFeedbackArtifactId || '')}
+                    className="flex-1 bg-green-600 hover:bg-green-700 text-white"
+                  >
+                    <CheckIcon className="h-4 w-4 mr-2" />
+                    Accept
+                  </Button>
+                  <Button 
+                    onClick={() => handleArtifactFeedbackStart(conversationState?.pendingFeedbackArtifactId || '')}
+                    className="flex-1 bg-orange-600 hover:bg-orange-700 text-white"
+                  >
+                    <MessageSquareIcon className="h-4 w-4 mr-2" />
+                    Provide Feedback
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : showRoutingChoice ? (
           // Show routing choice buttons
           <div className="mt-auto">
             <div className="flex justify-center items-center">
@@ -727,7 +912,8 @@ const InputDemo = () => {
                 onChange={(e) => setInputText(e.target.value)}
                 value={inputText}
                 className="w-full py-2 px-4 border rounded-md"
-                disabled={isLoading}
+                disabled={isChatInputBlocked}
+                placeholder={isChatInputBlocked ? "Please provide artifact feedback before continuing..." : "Type your message..."}
               />
               <PromptInputToolbar>
                 <PromptInputTools>
@@ -754,7 +940,7 @@ const InputDemo = () => {
                     </PromptInputModelSelectContent>
                   </PromptInputModelSelect>
                 </PromptInputTools>
-                <PromptInputSubmit disabled={!inputText.trim() || isLoading} />
+                <PromptInputSubmit disabled={!inputText.trim() || isChatInputBlocked} />
               </PromptInputToolbar>
             </PromptInput>
           </div>

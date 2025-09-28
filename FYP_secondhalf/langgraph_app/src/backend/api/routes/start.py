@@ -1,32 +1,53 @@
-import sys
+# src/backend/api/route/start.py
+
 import os
-import asyncio
-from datetime import datetime
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
-from backend.core.startup import shared_resources  # This is the key import
-from fastapi import APIRouter, HTTPException, Request, Body
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
-from typing import Optional
-from uuid import uuid4
-from backend.graph_logic.state import ArtifactState, ResumeInput, ChatInput, ContinueInput, ThreadInput, Artifact, InitialInput, ResumeRequest, GraphResponse
-from backend.utils.main_utils import load_prompts
-# Remove this import since we're not using the dependency anymore
-# from backend.utils.dependencies import get_graph
-from backend.path_global_file import OUTPUT_DIR
-from langgraph.graph import StateGraph, Graph
-from langgraph.types import Command
-from langgraph.graph.graph import CompiledGraph
-from langchain.schema import HumanMessage, SystemMessage, AIMessage
-from pydantic import BaseModel, ValidationError
-from sse_starlette.sse import EventSourceResponse
+import sys
 import json
 import time
 import uuid
+import asyncio
+from datetime import datetime, timezone
 from enum import Enum
+from typing import Optional
+from uuid import uuid4
+import logging 
+
+logger = logging.getLogger(__name__)
+
+# --- Path setup ---
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
+
+# --- FastAPI ---
+from fastapi import APIRouter, HTTPException, Request, Body
+from fastapi.responses import StreamingResponse
+from sse_starlette.sse import EventSourceResponse
+
+# --- Pydantic ---
+from pydantic import BaseModel, Field, ValidationError
+
+# --- Project-specific imports ---
+from backend.core.startup import shared_resources  # Key import
+from backend.graph_logic.state import (
+    ArtifactState,
+    ResumeInput,
+    ChatInput,
+    ContinueInput,
+    ThreadInput,
+    Artifact,
+    InitialInput,
+    ResumeRequest,
+    GraphResponse,
+)
+from backend.utils.main_utils import load_prompts
+from backend.path_global_file import OUTPUT_DIR
+
+# --- LangGraph / LangChain ---
+from langgraph.graph import StateGraph, Graph
+from langgraph.graph.graph import CompiledGraph
+from langgraph.types import Command
+from langchain.schema import HumanMessage, SystemMessage, AIMessage
 
 router = APIRouter()
-
 shared_resources_start = {}
 
 # Track the threads with their configurations
@@ -37,14 +58,19 @@ class ResumeType(str, Enum):
     FEEDBACK = "feedback"
     APPROVED = "approved" 
     ROUTING_CHOICE = "routing_choice"
+    ARTIFACT_FEEDBACK = "artifact_feedback"  # NEW: For artifact accept/feedback
 
-# Enhanced ResumeRequest model (you may need to update your existing model)
+# Enhanced ResumeRequest model
 class EnhancedResumeRequest(BaseModel):
     thread_id: str
     resume_type: Optional[ResumeType] = ResumeType.FEEDBACK  # Default to feedback for backward compatibility
     review_action: Optional[str] = None  # For feedback: "approved" or "feedback"
     human_comment: Optional[str] = None  # For feedback comments
     user_choice: Optional[str] = None    # For routing choices
+    # NEW: Artifact feedback fields
+    artifact_id: Optional[str] = None    # For artifact feedback
+    artifact_action: Optional[str] = None  # "accept" or "feedback"
+    artifact_feedback: Optional[str] = None  # Feedback text for artifacts
 
 # Valid routing choices
 VALID_ROUTING_CHOICES = {
@@ -55,6 +81,19 @@ VALID_ROUTING_CHOICES = {
     "revise_req_specs", 
     "no"
 }
+
+# Valid artifact actions
+VALID_ARTIFACT_ACTIONS = {"accept", "feedback"}
+
+
+try:
+    from backend.graph_logic.flow import process_artifact_feedback_direct
+    print("SUCCESS: process_artifact_feedback_direct imported successfully")
+except ImportError as e:
+    print(f"IMPORT ERROR: {e}")
+except Exception as e:
+    print(f"OTHER IMPORT ERROR: {e}")
+
 
 @router.get("/")
 async def root():
@@ -123,7 +162,7 @@ def create_graph_streaming(request: InitialInput):
         print(f"DEBUG: Response validation error: {e.errors()}")
         raise HTTPException(status_code=500, detail=f"Response validation failed: {str(e)}")
 
-# Enhanced resume endpoint that handles both feedback and routing choices
+# Enhanced resume endpoint that handles feedback, routing choices, and artifact feedback
 @router.post("/graph/stream/resume", response_model=GraphResponse)
 def resume_graph_streaming(request: EnhancedResumeRequest):
     thread_id = request.thread_id
@@ -138,11 +177,38 @@ def resume_graph_streaming(request: EnhancedResumeRequest):
     # Handle enhanced resume request if it has the new fields
     resume_type = request.resume_type or ResumeType.FEEDBACK
     user_choice = request.user_choice or None
+    artifact_id = request.artifact_id or None
+    artifact_action = request.artifact_action or None
     
     print(f"DEBUG: Resuming graph for thread_id={thread_id}, type={resume_type}")
     
     # Handle different types of resume requests
-    if resume_type == ResumeType.ROUTING_CHOICE or user_choice:
+    if resume_type == ResumeType.ARTIFACT_FEEDBACK or artifact_id:
+        # Handle artifact feedback resumption
+        if not artifact_id:
+            raise HTTPException(
+                status_code=400,
+                detail="artifact_id is required for artifact_feedback resume type"
+            )
+            
+        if not artifact_action or artifact_action not in VALID_ARTIFACT_ACTIONS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid artifact_action. Must be one of: {list(VALID_ARTIFACT_ACTIONS)}"
+            )
+        
+        print(f"DEBUG: Processing artifact feedback: {artifact_action} for artifact {artifact_id}")
+        
+        # Store artifact feedback configuration
+        run_configs[thread_id] = {
+            "type": "artifact_feedback",
+            "artifact_id": artifact_id,
+            "artifact_action": artifact_action,
+            "artifact_feedback": request.artifact_feedback,
+            "resume_type": resume_type.value if isinstance(resume_type, ResumeType) else resume_type
+        }
+        
+    elif resume_type == ResumeType.ROUTING_CHOICE or user_choice:
         # Handle routing choice interrupt resumption
         if not user_choice:
             raise HTTPException(
@@ -193,74 +259,6 @@ def resume_graph_streaming(request: EnhancedResumeRequest):
         assistant_response=None
     )
 
-# Alternative endpoint for direct routing choice handling (optional)
-@router.post("/graph/resume/{thread_id}")
-async def resume_interrupted_graph(thread_id: str, request_body: dict):
-    """
-    Resume an interrupted graph with user input.
-    This endpoint specifically handles routing choice interrupts.
-    """
-    try:
-        # Check if graph is available
-        if 'graph' not in shared_resources or shared_resources['graph'] is None:
-            raise HTTPException(
-                status_code=503, 
-                detail="The graph application is not available or has not been initialized."
-            )
-        
-        user_choice = request_body.get("user_choice")
-        if not user_choice:
-            raise HTTPException(
-                status_code=400,
-                detail="user_choice is required"
-            )
-        
-        # Validate user choice
-        if user_choice not in VALID_ROUTING_CHOICES:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid choice. Must be one of: {list(VALID_ROUTING_CHOICES)}"
-            )
-        
-        print(f"DEBUG: Resuming interrupted graph for thread_id={thread_id} with choice: {user_choice}")
-        
-        # Get the current interrupted state
-        graph = shared_resources['graph']
-        config = {"configurable": {"thread_id": thread_id}}
-        current_state = await graph.aget_state(config)
-        
-        if not current_state.next:
-            raise HTTPException(
-                status_code=400,
-                detail="No interrupted state found for this thread"
-            )
-        
-        # Update the state with user input
-        updated_values = {
-            "next_routing_node": user_choice,
-            "human_request": user_choice  # Store user input in human_request attribute
-        }
-        
-        # Resume the graph with the updated state
-        await graph.aupdate_state(config, updated_values)
-        
-        print(f"DEBUG: Graph state updated with user choice: {user_choice}")
-        
-        return {
-            "status": "resumed",
-            "user_choice": user_choice,
-            "thread_id": thread_id
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"DEBUG: Error resuming graph: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
-
 feedback_nodes = []
 
 # Map nodes to their corresponding agents for better UX
@@ -275,173 +273,535 @@ node_to_agent_map = {
     "handle_routing_decision": "Routing"  # Add the routing decision node
 }
 
-# FIXED: Remove Depends(get_graph) and access graph from shared_resources
+import asyncio
+from fastapi.responses import StreamingResponse
+from sse_starlette.sse import EventSourceResponse
+
 @router.get("/graph/stream/{thread_id}")
 async def stream_graph(request: Request, thread_id: str):
-    # Get graph from shared_resources instead of dependency injection
+    # Add immediate logging
+    print(f"=== SSE REQUEST START for thread_id: {thread_id} ===")
+    print(f"Request headers: {dict(request.headers)}")
+    print(f"Request method: {request.method}")
+    print(f"Request URL: {request.url}")
+    
+    # Check if graph is available
     if 'graph' not in shared_resources or shared_resources['graph'] is None:
+        print("ERROR: Graph not available in shared_resources")
         raise HTTPException(
             status_code=503, 
             detail="The graph application is not available or has not been initialized."
         )
     
-    graph = shared_resources['graph']
-    print(f"DEBUG: Using graph from shared_resources: {graph is not None}")
-
+    # Check if thread exists
     if thread_id not in run_configs:
+        print(f"ERROR: Thread {thread_id} not found in run_configs")
+        print(f"Available threads: {list(run_configs.keys())}")
         raise HTTPException(status_code=404, detail="Thread not found")
     
+    print(f"Thread found: {run_configs[thread_id]}")
+    
+    graph = shared_resources['graph']
     run_data = run_configs[thread_id]
     config = {"configurable": {"thread_id": thread_id}}
     
-    input_state = None
+    # NEW: Thread ID consistency checks
+    print(f"DEBUG: ===== THREAD ID CONSISTENCY CHECK =====")
+    print(f"DEBUG: URL thread_id: '{thread_id}'")
+    print(f"DEBUG: Config thread_id: '{config['configurable']['thread_id']}'")
+    print(f"DEBUG: Run_data keys: {list(run_data.keys())}")
     
-    # Handle different types of operations
-    if run_data["type"] == "start":
-        event_type = "start"
-        input_state = {"human_request": run_data["human_request"]}
-    elif run_data["type"] == "routing_choice":
-        event_type = "resume_routing"
-        # Handle routing choice resumption
-        user_choice = run_data.get("user_choice")
-        print(f"DEBUG: Resuming with routing choice: {user_choice}")
-        
-        # Update the graph state with the routing choice
-        updated_values = {
-            "next_routing_node": user_choice,
-            "human_request": user_choice
-        }
-        await graph.aupdate_state(config, updated_values)
-        input_state = None  # State already updated, continue from current state
-    else:
-        # Original feedback resume logic
-        event_type = "resume"
-        state_update = {"status": run_data["review_action"]}
-        if run_data.get("human_comment") is not None:
-            state_update["human_comment"] = run_data["human_comment"]
-        await graph.aupdate_state(config, state_update)
-        input_state = None
+    # Check if run_data has its own thread_id
+    if 'thread_id' in run_data:
+        print(f"DEBUG: Run_data thread_id: '{run_data['thread_id']}'")
+        if run_data['thread_id'] != thread_id:
+            print(f"WARNING: Thread ID mismatch in run_data!")
+    
+    # Check current graph state for this thread
+    try:
+        current_state = await graph.aget_state(config)
+        if current_state and current_state.values:
+            state_artifacts = current_state.values.get('artifacts', [])
+            print(f"DEBUG: Current graph state has {len(state_artifacts)} artifacts")
+            for i, art in enumerate(state_artifacts):
+                art_thread_id = getattr(art, 'thread_id', 'NO_THREAD_ID')
+                print(f"DEBUG: State artifact {i}: ID='{art.id}', thread_id='{art_thread_id}'")
+                if art_thread_id != thread_id:
+                    print(f"WARNING: Artifact {art.id} has different thread_id!")
+        else:
+            print(f"DEBUG: No current state found for thread {thread_id}")
+    except Exception as e:
+        print(f"ERROR: Failed to get current state: {e}")
+    
+    print(f"DEBUG: ===== END CONSISTENCY CHECK =====")
 
     async def event_generator():
-        # Initial event with thread_id
-        start_payload = json.dumps({"thread_id": thread_id})
-        print(f"DEBUG: Sending initial {event_type} event with data: {start_payload}")
-        yield start_payload
-
         try:
-            print(f"DEBUG: Starting to stream graph updates for thread_id={thread_id}")
+            # First, send a connection test
+            print("=== STARTING EVENT GENERATOR ===")
             
-            # Use stream_mode="updates" to get state changes after each node
-            async for state_update in graph.astream(input_state, config, stream_mode="updates"):
-                print(f"DEBUG: Raw update: {state_update!r}")
-
-                if "__interrupt__" in state_update:
-                    print(f"DEBUG: Graph interrupted at thread_id={thread_id}")
+            # Send initial ping to test connection
+            initial_payload = json.dumps({
+                "status": "connected", 
+                "thread_id": thread_id,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            })
+            print(f"Sending initial payload: {initial_payload}")
+            yield initial_payload
+            
+            # Small delay to ensure connection is established
+            await asyncio.sleep(0.1)
+           
+            input_state = None
+            should_cleanup_thread = True  # Flag to control thread cleanup
+            
+            # Initialize event_type of different types of events
+            if run_data["type"] == "start":
+                event_type = "start"
+                input_state = {"human_request": run_data["human_request"]}
+            
+            elif run_data["type"] == "routing_choice":
+                event_type = "resume_routing"
+                user_choice = run_data.get("user_choice")
+                print(f"DEBUG: Resuming with routing choice: {user_choice}")
                 
-                    # Send interrupt status to frontend
-                    interrupt_payload = json.dumps({
-                        "chat_type": "interrupt",
-                        "status": "waiting_for_user_input",
-                        "message": "Please choose the next action: classify_user_requirements, write_system_requirement, build_requirement_model, write_req_specs, or revise_req_specs",
-                        "thread_id": thread_id,
-                        "timestamp": datetime.utcnow().isoformat()
+                updated_values = {
+                    "next_routing_node": user_choice,
+                    "human_request": user_choice
+                }
+                await graph.aupdate_state(config, updated_values)
+                input_state = None
+                
+            elif run_data["type"] == "artifact_feedback":
+                event_type = "resume_artifact_feedback"
+                
+                # Handle artifact feedback processing
+                artifact_id = run_data.get("artifact_id")
+                artifact_action = run_data.get("artifact_action")
+                artifact_feedback = run_data.get("artifact_feedback")
+                
+                print(f"DEBUG: Starting artifact feedback processing")
+                print(f"DEBUG: artifact_id={artifact_id}")
+                print(f"DEBUG: artifact_action={artifact_action}")
+                print(f"DEBUG: artifact_feedback={artifact_feedback}")
+                
+                if artifact_action == "accept":
+                    print(f"DEBUG: Artifact {artifact_id} accepted, continuing workflow")
+                    
+                    # Send acceptance confirmation to frontend
+                    acceptance_payload = json.dumps({
+                        "chat_type": "conversation",
+                        "content": f"✅ Artifact {artifact_id} has been accepted. Continuing with workflow...",
+                        "node": "artifact_feedback_processor",
+                        "agent": "System",
+                        "artifact_id": artifact_id,
+                        "timestamp": datetime.now(timezone.utc).isoformat()
                     })
-                    yield interrupt_payload
-
-                    # Store the current state for resumption
-                    current_state = await graph.aget_state(config)
-                    print(f"DEBUG: Stored interrupted state for thread_id={thread_id}")
+                    yield acceptance_payload
                     
-                    # Exit the generator - frontend will need to make a new request to continue
-                    return
-                
-                # Each state_update is like: { "node_name": { "conversations": [...], "artifacts": [...] } }
-                for node_name, updates in state_update.items():
-                    print(f"DEBUG: Node '{node_name}' completed with updates: {list(updates.keys())}")
+                    # Clear ALL feedback-related state and continue workflow
+                    await graph.aupdate_state(config, {
+                        "paused_for_feedback": False,
+                        "artifact_feedback_id": None,
+                        "artifact_feedback_action": None,
+                        "artifact_feedback_text": None
+                    })
+                    print(f"DEBUG: Resuming normal workflow after artifact acceptance")
+
+                    input_state = None 
                     
-                    # Handle routing decision updates (next_routing_node changes)
-                    if "next_routing_node" in updates:
-                        routing_payload = json.dumps({
-                            "chat_type": "routing_decision",
-                            "content": f"Routing to: {updates['next_routing_node']}",
-                            "node": node_name,
-                            "agent": node_to_agent_map.get(node_name, "Assistant"),
-                            "next_node": updates["next_routing_node"],
-                            "timestamp": datetime.utcnow().isoformat()
-                        })
-                        yield routing_payload
-
-                    # Handle new conversations
-                    new_conversations = updates.get("conversations", [])
-                    for conversation in new_conversations:
-                        conversation_payload = json.dumps({
-                            "chat_type": "conversation",
-                            "content": conversation.content,
-                            "node": node_name,
-                            "agent": conversation.agent.value,
-                            "artifact_id": conversation.artifact_id,
-                            "timestamp": conversation.timestamp.isoformat()
-                        })
-                        yield conversation_payload
-
-                    # Handle new artifacts
-                    new_artifacts = updates.get("artifacts", [])
-                    # In your Python backend streaming code
-                    for artifact in new_artifacts:
-                        # Serialize Pydantic model content properly
-                        content_data = None
-                        if artifact.content:
-                            if hasattr(artifact.content, 'model_dump'):  # Pydantic v2
-                                content_data = artifact.content.model_dump()
-                            else:
-                                content_data = str(artifact.content)  # Fallback for strings
+                elif artifact_action == "feedback":
+                    print(f"DEBUG: Processing feedback for artifact {artifact_id}")
+                    
+                    try:
+                        # Get current state
+                        current_state = await graph.aget_state(config)
+                        print(f"DEBUG: Retrieved current state: {type(current_state)}")
+                        print(f"DEBUG: State values keys: {list(current_state.values.keys()) if current_state.values else 'No values'}")
                         
-                        artifact_payload = json.dumps({
-                            "chat_type": "artifact",
-                            "artifact_id": artifact.id,
-                            "artifact_type": artifact.content_type.value,
-                            "agent": artifact.created_by.value if hasattr(artifact.created_by, 'value') else str(artifact.created_by),
-                            "content": content_data,  # Now properly serialized
-                            "node": node_name,
-                            "version": artifact.version,
-                            "timestamp": artifact.timestamp.isoformat(),
-                            "status": "completed"
+                        # Send feedback processing notification
+                        processing_payload = json.dumps({
+                            "chat_type": "conversation",
+                            "content": f"🔄 Processing your feedback for artifact {artifact_id}: '{artifact_feedback}'",
+                            "node": "artifact_feedback_processor",
+                            "agent": "System",
+                            "artifact_id": artifact_id,
+                            "timestamp": datetime.now(timezone.utc).isoformat()
                         })
-                        yield artifact_payload
-
-                    # Handle errors
-                    new_errors = updates.get("errors", [])
-                    for error in new_errors:
+                        yield processing_payload
+                        
+                        # Try to import the feedback processor
+                        try:
+                            from backend.graph_logic.flow import process_artifact_feedback_direct
+                            print("DEBUG: Successfully imported process_artifact_feedback_direct")
+                        except ImportError as e:
+                            print(f"ERROR: Failed to import process_artifact_feedback_direct: {e}")
+                            error_payload = json.dumps({
+                                "chat_type": "error",
+                                "content": f"Failed to import feedback processor: {str(e)}",
+                                "node": "artifact_feedback_processor",
+                                "agent": "System"
+                            })
+                            yield error_payload
+                            return
+                        
+                        # Prepare feedback input
+                        feedback_input = {
+                            **current_state.values,
+                            'artifact_feedback_id': artifact_id,
+                            'artifact_feedback_action': artifact_action,
+                            'artifact_feedback_text': artifact_feedback
+                        }
+                        
+                        print(f"DEBUG: Calling process_artifact_feedback_direct with input keys: {list(feedback_input.keys())}")
+                        
+                        # IMPORTANT: Check if the function is async or sync
+                        import inspect
+                        if inspect.iscoroutinefunction(process_artifact_feedback_direct):
+                            print("DEBUG: Function is async, calling with await")
+                            feedback_result = await process_artifact_feedback_direct(feedback_input)
+                        else:
+                            print("DEBUG: Function is sync, calling directly")
+                            feedback_result = process_artifact_feedback_direct(feedback_input)
+                        
+                        print(f"DEBUG: Feedback processing completed")
+                        print(f"DEBUG: Result type: {type(feedback_result)}")
+                        print(f"DEBUG: Result keys: {list(feedback_result.keys()) if feedback_result else 'No result'}")
+                        
+                        # DETAILED DEBUGGING: Print the actual content
+                        if feedback_result:
+                            for key, value in feedback_result.items():
+                                print(f"DEBUG: {key} = {type(value)} with length {len(value) if hasattr(value, '__len__') else 'N/A'}")
+                                if key == "conversations" and value:
+                                    print(f"DEBUG: First conversation: {value[0] if value else 'None'}")
+                                if key == "artifacts" and value:
+                                    print(f"DEBUG: First artifact: {value[0].id if value else 'None'}")
+                                # NEW: Print error details
+                                if key == "errors" and value:
+                                    print(f"DEBUG: Error content: {value}")
+                                    for i, error in enumerate(value):
+                                        print(f"DEBUG: Error {i}: {error}")
+                        
+                        # Check if there are errors and handle them
+                        if feedback_result and feedback_result.get("errors"):
+                            error_messages = feedback_result["errors"]
+                            print(f"ERROR: process_artifact_feedback_direct returned errors: {error_messages}")
+                            
+                            # Send the actual errors to the frontend
+                            for error_msg in error_messages:
+                                error_payload = json.dumps({
+                                    "chat_type": "error",
+                                    "content": f"Feedback processing error: {error_msg}",
+                                    "node": "artifact_feedback_processor",
+                                    "agent": "System"
+                                })
+                                yield error_payload
+                            
+                            # Keep thread alive so user can try again
+                            should_cleanup_thread = False
+                            print(f"DEBUG: Keeping thread {thread_id} alive due to processing errors")
+                            return
+                        
+                        # Check if the function actually processed the feedback successfully
+                        if not feedback_result or (
+                            not feedback_result.get("conversations") and 
+                            not feedback_result.get("artifacts")
+                        ):
+                            print("ERROR: process_artifact_feedback_direct returned no conversations or artifacts")
+                            error_payload = json.dumps({
+                                "chat_type": "error",
+                                "content": "The feedback processing function did not generate any revised artifacts. This might be a problem with the function implementation, or your feedback might need to be more specific.",
+                                "node": "artifact_feedback_processor",
+                                "agent": "System"
+                            })
+                            yield error_payload
+                            
+                            # Keep thread alive so user can try again
+                            should_cleanup_thread = False
+                            print(f"DEBUG: Keeping thread {thread_id} alive for retry")
+                            return
+                        
+                        # Send conversation updates
+                        if "conversations" in feedback_result and feedback_result["conversations"]:
+                            print(f"DEBUG: Sending {len(feedback_result['conversations'])} conversation updates")
+                            for conv in feedback_result["conversations"]:
+                                conv_payload = json.dumps({
+                                    "chat_type": "conversation",
+                                    "content": conv.content,
+                                    "node": "artifact_feedback_processor",
+                                    "agent": conv.agent.value if hasattr(conv.agent, 'value') else str(conv.agent),
+                                    "artifact_id": getattr(conv, 'artifact_id', None),
+                                    "timestamp": conv.timestamp.isoformat() if hasattr(conv, 'timestamp') else datetime.now(timezone.utc).isoformat()
+                                })
+                                yield conv_payload
+                        else:
+                            print("DEBUG: No conversations in feedback result")
+                        
+                        # Send revised artifacts and require feedback again
+                        if "artifacts" in feedback_result and feedback_result["artifacts"]:
+                            print(f"DEBUG: Sending {len(feedback_result['artifacts'])} revised artifacts")
+                            for art in feedback_result["artifacts"]:
+                                print(f"DEBUG STREAM: Sending revised artifact {art.id}, version: {art.version}")
+                                
+                                # Serialize content
+                                content_data = None
+                                if art.content:
+                                    if hasattr(art.content, 'model_dump'):
+                                        content_data = art.content.model_dump()
+                                    else:
+                                        content_data = str(art.content)
+                                
+                                # Send the revised artifact
+                                art_payload = json.dumps({
+                                    "chat_type": "artifact",
+                                    "artifact_id": art.id,
+                                    "artifact_type": art.content_type.value if hasattr(art.content_type, 'value') else str(art.content_type),
+                                    "agent": art.created_by.value if hasattr(art.created_by, 'value') else str(art.created_by),
+                                    "content": content_data,
+                                    "node": "artifact_feedback_processor",
+                                    "version": art.version,
+                                    "timestamp": art.timestamp.isoformat() if hasattr(art.timestamp, 'isoformat') else str(art.timestamp),
+                                    "status": "completed"
+                                })
+                                yield art_payload
+                                
+                                # Immediately require feedback for the revised artifact
+                                print(f"DEBUG: Requiring feedback for revised artifact {art.id}")
+                                feedback_required_payload = json.dumps({
+                                    "chat_type": "artifact_feedback_required",
+                                    "status": "artifact_feedback_required", 
+                                    "pending_artifact_id": art.id,
+                                    "thread_id": thread_id,
+                                    "timestamp": datetime.now(timezone.utc).isoformat()
+                                })
+                                yield feedback_required_payload
+                        
+                        # Update graph state with results
+                        print(f"DEBUG: Updating graph state with feedback results")
+                        await graph.aupdate_state(config, feedback_result)
+                        
+                        # Keep paused for the next feedback cycle
+                        await graph.aupdate_state(config, {"paused_for_feedback": True})
+                        
+                        # DON'T delete the thread - we need it for the next feedback cycle
+                        should_cleanup_thread = False
+                        print(f"DEBUG: Keeping thread {thread_id} alive for next feedback cycle")
+                        
+                    except Exception as e:
+                        print(f"ERROR: Failed to process artifact feedback: {str(e)}")
+                        import traceback
+                        print(f"ERROR: Full traceback: {traceback.format_exc()}")
+                        
                         error_payload = json.dumps({
                             "chat_type": "error",
-                            "content": error,
-                            "node": node_name,
-                            "agent": node_to_agent_map.get(node_name, "Assistant")
+                            "content": f"Failed to process feedback: {str(e)}",
+                            "node": "artifact_feedback_processor",
+                            "agent": "System"
                         })
                         yield error_payload
+                        
+                        # Keep thread alive so user can try again
+                        should_cleanup_thread = False
+                        print(f"DEBUG: Keeping thread {thread_id} alive after exception")
+                    
+                    # Exit and wait for next user action (accept or more feedback)
+                    return
 
-            # Check final state for feedback nodes
-            final_state = await graph.aget_state(config)
-            if final_state.next and any(node in final_state.next for node in feedback_nodes):
-                status_data = json.dumps({"status": "user_feedback"})
-                print(f"DEBUG: Sending status event (feedback): {status_data}")
-                yield status_data
+                input_state = None
             else:
-                status_data = json.dumps({"status": "finished"})
-                print(f"DEBUG: Sending status event (finished): {status_data}")
-                yield status_data
+                # Original feedback resume logic
+                event_type = "resume"
+                state_update = {"status": run_data["review_action"]}
+                if run_data.get("human_comment") is not None:
+                    state_update["human_comment"] = run_data["human_comment"]
+                await graph.aupdate_state(config, state_update)
+                input_state = None
 
-            # Cleanup
-            if thread_id in run_configs:
+            # Send event type confirmation
+            event_payload = json.dumps({
+                "status": "processing", 
+                "event_type": event_type,
+                "thread_id": thread_id
+            })
+            print(f"Sending event type: {event_payload}")
+            yield event_payload
+            
+            # Regular graph streaming (only if we have input_state or are continuing after accept)
+            if input_state is not None or run_data["type"] == "start" or (run_data["type"] == "artifact_feedback" and run_data.get("artifact_action") == "accept"):
+                print(f"Starting graph streaming with input_state: {input_state}")
+                
+                # Use stream_mode="updates" to get state changes after each node
+                async for state_update in graph.astream(input_state, config, stream_mode="updates"):
+
+                    if "__interrupt__" in state_update:
+                        print(f"DEBUG: Graph interrupted at thread_id={thread_id}")
+                    
+                        # Send interrupt status to frontend
+                        interrupt_payload = json.dumps({
+                            "chat_type": "interrupt",
+                            "status": "waiting_for_user_input",
+                            "message": "Please choose the next action: classify_user_requirements, write_system_requirement, build_requirement_model, write_req_specs, or revise_req_specs",
+                            "thread_id": thread_id,
+                            "timestamp": datetime.now(timezone.utc).isoformat()
+                        })
+                        yield interrupt_payload
+
+                        # Store the current state for resumption
+                        current_state = await graph.aget_state(config)
+                        print(f"DEBUG: Stored interrupted state for thread_id={thread_id}")
+                        
+                        # DON'T delete the thread - we need it for resumption
+                        should_cleanup_thread = False
+                        # Exit the generator - frontend will need to make a new request to continue
+                        return
+
+                    for node_name, updates in state_update.items():
+                        print(f"DEBUG: Node '{node_name}' completed with updates: {list(updates.keys())}")
+                        
+                        # NEW: Debug the actual state after node completion
+                        print(f"DEBUG: Testing immediate state persistence after {node_name}...")
+                        current_state_check = await graph.aget_state(config)
+                        if current_state_check and current_state_check.values:
+                            artifacts_in_state = current_state_check.values.get('artifacts', [])
+                            conversations_in_state = current_state_check.values.get('conversations', [])
+                            print(f"DEBUG: After {node_name}, state now has {len(artifacts_in_state)} artifacts and {len(conversations_in_state)} conversations")
+                            
+                            for i, art in enumerate(artifacts_in_state):
+                                print(f"  Artifact {i}: {art.id} (thread: {getattr(art, 'thread_id', 'NO_THREAD')})")
+                        else:
+                            print(f"DEBUG: CRITICAL - After {node_name}, state is empty or has no values!")
+                        
+                        # This is for node routing before reaching END node
+                        if "next_routing_node" in updates:
+                            routing_payload = json.dumps({
+                                "chat_type": "routing_decision",
+                                "content": f"Routing to: {updates['next_routing_node']}",
+                                "node": node_name,
+                                "agent": node_to_agent_map.get(node_name, "Assistant"),
+                                "next_node": updates["next_routing_node"],
+                                "timestamp": datetime.now(timezone.utc).isoformat()
+                            })
+                            yield routing_payload
+
+                        # Handle new conversations
+                        new_conversations = updates.get("conversations", [])
+                        print(f"DEBUG: Node {node_name} returned {len(new_conversations)} new conversations")
+                        for conversation in new_conversations:
+                            conversation_payload = json.dumps({
+                                "chat_type": "conversation",
+                                "content": conversation.content,
+                                "node": node_name,
+                                "agent": conversation.agent.value,
+                                "artifact_id": conversation.artifact_id,
+                                "timestamp": conversation.timestamp.isoformat()
+                            })
+                            yield conversation_payload
+
+                        # Handle new artifacts and check for feedback requirement
+                        new_artifacts = updates.get("artifacts", [])
+                        print(f"DEBUG: Node {node_name} returned {len(new_artifacts)} new artifacts")
+                        for artifact in new_artifacts:
+                            print(f"DEBUG: Processing artifact from node update: {artifact.id} (thread: {getattr(artifact, 'thread_id', 'NO_THREAD')})")
+                            
+                            # Serialize Pydantic model content properly
+                            content_data = None
+                            if artifact.content:
+                                if hasattr(artifact.content, 'model_dump'):  # Pydantic v2
+                                    content_data = artifact.content.model_dump()
+                                else:
+                                    content_data = str(artifact.content)  # Fallback for strings
+                            
+                            artifact_payload = json.dumps({
+                                "chat_type": "artifact",
+                                "artifact_id": artifact.id,
+                                "artifact_type": artifact.content_type.value,
+                                "agent": artifact.created_by.value if hasattr(artifact.created_by, 'value') else str(artifact.created_by),
+                                "content": content_data,  # Now properly serialized
+                                "node": node_name,
+                                "version": artifact.version,
+                                "timestamp": artifact.timestamp.isoformat(),  # Use artifact's own timestamp
+                                "status": "completed"
+                            })
+                            yield artifact_payload
+
+                            # Always require feedback for ALL completed artifacts (original and revised)
+                            if artifact.id and artifact.content:
+                                print(f"DEBUG: Artifact {artifact.id} (version {artifact.version}) completed, requiring feedback")
+                                
+                                # CRITICAL DEBUG: Check state right before requiring feedback
+                                final_state_check = await graph.aget_state(config)
+                                if final_state_check and final_state_check.values:
+                                    final_artifacts = final_state_check.values.get('artifacts', [])
+                                    print(f"DEBUG: FINAL CHECK - State has {len(final_artifacts)} artifacts before requiring feedback")
+                                    for i, art in enumerate(final_artifacts):
+                                        print(f"  Final artifact {i}: {art.id} (thread: {getattr(art, 'thread_id', 'NO_THREAD')})")
+                                else:
+                                    print(f"DEBUG: CRITICAL ERROR - Final state check shows empty state before requiring feedback!")
+                                
+                                # Send artifact feedback requirement
+                                feedback_required_payload = json.dumps({
+                                    "chat_type": "artifact_feedback_required",
+                                    "status": "artifact_feedback_required", 
+                                    "pending_artifact_id": artifact.id,
+                                    "thread_id": thread_id,
+                                    "timestamp": datetime.now(timezone.utc).isoformat()
+                                })
+                                yield feedback_required_payload
+                                
+                                # Store the current graph state to prevent race conditions
+                                await graph.aupdate_state(config, {"paused_for_feedback": True})
+                                
+                                # DON'T delete the thread - we need it for feedback
+                                should_cleanup_thread = False
+                                # Exit the generator - frontend will need to provide feedback
+                                return
+
+                        # Handle errors
+                        new_errors = updates.get("errors", [])
+                        for error in new_errors:
+                            error_payload = json.dumps({
+                                "chat_type": "error",
+                                "content": error,
+                                "node": node_name,
+                                "agent": node_to_agent_map.get(node_name, "Assistant")
+                            })
+                            yield error_payload
+                
+
+
+        except asyncio.CancelledError:
+            print(f"Stream cancelled for thread {thread_id}")
+            should_cleanup_thread = False  # Don't cleanup on cancellation
+            raise
+        except Exception as e:
+            print(f"ERROR in event_generator: {str(e)}")
+            import traceback
+            print(f"Full traceback: {traceback.format_exc()}")
+            
+            # Send error to frontend
+            error_payload = json.dumps({
+                "status": "error",
+                "error": str(e),
+                "thread_id": thread_id,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            })
+            yield error_payload
+        finally:
+            print(f"=== EVENT GENERATOR FINISHED for thread {thread_id} ===")
+            # Only cleanup thread if we should (i.e., not waiting for feedback/routing)
+            if should_cleanup_thread and thread_id in run_configs:
                 print(f"DEBUG: Cleaning up thread_id={thread_id} from run_configs")
                 del run_configs[thread_id]
+            else:
+                print(f"DEBUG: Keeping thread_id={thread_id} alive for future requests")
 
-        except Exception as e:
-            print(f"DEBUG: Exception in event_generator: {str(e)}")
-            error_data = json.dumps({"error": str(e)})
-            yield error_data
-            if thread_id in run_configs:
-                print(f"DEBUG: Cleaning up thread_id={thread_id} from run_configs after error")
-                del run_configs[thread_id]
-
-    return EventSourceResponse(event_generator())
+    # Return EventSourceResponse with proper headers
+    return EventSourceResponse(
+        event_generator(),
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "Cache-Control"
+        }
+    )

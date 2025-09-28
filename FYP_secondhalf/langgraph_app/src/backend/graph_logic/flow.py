@@ -1,12 +1,10 @@
-"""
-workingn @30 Aug: moved here cos I wanted to test state storing using sqlite async saver"""
-
+# backend / graph_logic/flow.py
 from typing import Any, Dict, List, Union, Optional, Annotated
 import os
 import json
 import asyncio
 from operator import add
-import time
+from datetime import datetime, timezone
 import logging
 import sys
 import base64
@@ -108,17 +106,46 @@ graph = None
 prompt_path = PROMPT_DIR_ANALYST
 PROMPT_LIBRARY = load_prompts(prompt_path)
 
+# For artifact revision after receiving user feedback 
+ARTIFACT_REGENERATION_MAP = {
+    ArtifactType.REQ_CLASS: {
+        "function": "classify_user_requirements",
+        "prompt_key": "classify_user_reqs",
+        "structured_output": RequirementsClassificationList,
+        "agent": AgentType.ANALYST
+    },
+    ArtifactType.SYSTEM_REQ: {
+        "function": "write_system_requirement", 
+        "prompt_key": "write_system_req",
+        "structured_output": SystemRequirementsList,
+        "agent": AgentType.ANALYST
+    },
+    ArtifactType.REQ_MODEL: {
+        "function": "build_requirement_model",
+        "prompt_key": "build_req_model", 
+        "structured_output": None,  # Special handling for diagrams
+        "agent": AgentType.ANALYST
+    },
+    ArtifactType.SW_REQ_SPECS: {
+        "function": "write_req_specs",
+        "prompt_key": "write_req_specs",
+        "structured_output": SoftwareRequirementSpecs,
+        "agent": AgentType.ARCHIVIST
+    }
+}
 
 llm = init_chat_model("openai:gpt-4.1")
 
-
 # First node: Process user input and convert to conversation
-def process_user_input(state: ArtifactState) -> ArtifactState:
+def process_user_input(state: ArtifactState, config: dict) -> ArtifactState:
     """
     First node: Convert user input to conversation entry
     This is the entry point that processes the user input from LangGraph Studio
     """
     try:
+        thread_id = config["configurable"]["thread_id"]
+        print(f"DEBUG: process_user_input using thread_id: {thread_id}")
+        
         # Check if there's user input
         if not state.human_request or state.human_request.strip() == "":
             return {
@@ -143,32 +170,49 @@ def process_user_input(state: ArtifactState) -> ArtifactState:
             "errors": [f"Failed to process user input: {str(e)}"]
         }
 
-
-# Example usage in workflow nodes
-async def classify_user_requirements(state: ArtifactState) -> ArtifactState:
+async def classify_user_requirements(state: ArtifactState, config: dict) -> ArtifactState:
     try:
+        thread_id = config["configurable"]["thread_id"]
+        print(f"DEBUG: classify_user_requirements using thread_id: {thread_id}")
+        print(f"DEBUG: Current state before processing has {len(state.artifacts)} existing artifacts")
+        
+        # Debug current state artifacts
+        if state.artifacts:
+            for i, existing_art in enumerate(state.artifacts):
+                print(f"DEBUG: Existing artifact {i}: {existing_art.id} (thread: {getattr(existing_art, 'thread_id', 'NO_THREAD')})")
+        
         llm_with_structured_output = llm.with_structured_output(RequirementsClassificationList)
         system_prompt = PROMPT_LIBRARY.get("classify_user_reqs")
 
         if not system_prompt:
             raise ValueError("Missing 'classify_user_reqs' prompt in prompt library.")
         
-        
+        print(f"DEBUG: About to call LLM for classification")
         response = await llm_with_structured_output.ainvoke(
         [
             SystemMessage(content=system_prompt),
             HumanMessage(content=state.conversations[-1].content)
         ]
         )
+        print(f"DEBUG: LLM response received successfully")
+        
         converted_text = await pydantic_to_json_text(response)
+        print(f"DEBUG: Converted text generated successfully")
 
-
-        # Create artifact using factory function
-        artifact = create_artifact(
-            agent=AgentType.ANALYST,
-            artifact_type=ArtifactType.REQ_CLASS,
-            content=response,  
+        # Create artifact using factory function with explicit thread_id
+        artifact = Artifact(
+            id="requirements_classification_Analyst_v1.0",
+            content=response,
+            content_type=ArtifactType.REQ_CLASS,
+            created_by=AgentType.ANALYST,
+            version="1.0",
+            thread_id=thread_id,  # EXPLICIT thread_id
+            timestamp=datetime.now(timezone.utc)
         )
+        
+        print(f"DEBUG: About to return artifact: {artifact.id} with thread_id: {artifact.thread_id}")
+        print(f"DEBUG: Artifact content type: {artifact.content_type}")
+        print(f"DEBUG: Artifact created by: {artifact.created_by}")
         
         # Create conversation entry
         conversation = create_conversation(
@@ -177,19 +221,30 @@ async def classify_user_requirements(state: ArtifactState) -> ArtifactState:
             content=converted_text
         )
         
-        return {
+        print(f"DEBUG: Conversation created with artifact_id: {conversation.artifact_id}")
+        
+        result = {
             "artifacts": [artifact],  
             "conversations": [conversation],  
         }
         
+        print(f"DEBUG: Returning result with {len(result['artifacts'])} artifacts and {len(result['conversations'])} conversations")
+        print(f"DEBUG: Result artifact IDs: {[art.id for art in result['artifacts']]}")
+        
+        return result
+        
     except Exception as e:
+        print(f"ERROR: Exception in classify_user_requirements: {str(e)}")
+        import traceback
+        print(f"ERROR: Full traceback: {traceback.format_exc()}")
         return {
             "errors": [f"Classification failed: {str(e)}"]
         }
-
+async def write_system_requirement(state: ArtifactState, config: dict) -> ArtifactState:
+    try:
+        thread_id = config["configurable"]["thread_id"]
+        print(f"DEBUG: write_system_requirement using thread_id: {thread_id}")
         
-async def write_system_requirement(state: ArtifactState) -> ArtifactState:
-    try: 
         llm_with_structured_output = llm.with_structured_output(SystemRequirementsList)
         system_prompt = PROMPT_LIBRARY.get("write_system_req")
 
@@ -204,12 +259,15 @@ async def write_system_requirement(state: ArtifactState) -> ArtifactState:
         )
         converted_text = await pydantic_to_json_text(response)
 
-        
-        # Create artifact using factory function
-        artifact = create_artifact(
-            agent=AgentType.ANALYST,
-            artifact_type=ArtifactType.SYSTEM_REQ,
-            content=response,  
+        # Create artifact with explicit thread_id
+        artifact = Artifact(
+            id="system_requirements_Analyst_v1.0",
+            content=response,
+            content_type=ArtifactType.SYSTEM_REQ,
+            created_by=AgentType.ANALYST,
+            version="1.0",
+            thread_id=thread_id,  # EXPLICIT thread_id
+            timestamp=datetime.now(timezone.utc)
         )
         
         # Create conversation entry
@@ -228,7 +286,7 @@ async def write_system_requirement(state: ArtifactState) -> ArtifactState:
         return {
             "errors": [f"Classification failed: {str(e)}"]
         }
-    
+
 async def generate_use_case_diagram(uml_code: str) -> dict:
     """
     Generate a use case diagram from PlantUML code and return both path and base64 data
@@ -280,10 +338,13 @@ async def generate_use_case_diagram(uml_code: str) -> dict:
             "message": f"Error generating diagram: {str(e)}"
         }
 
-async def build_requirement_model(state: ArtifactState) -> ArtifactState:
+async def build_requirement_model(state: ArtifactState, config: dict) -> ArtifactState:
     logger.debug("DEBUG: build_requirement_model function started")
     
     try:
+        thread_id = config["configurable"]["thread_id"]
+        print(f"DEBUG: build_requirement_model using thread_id: {thread_id}")
+        
         logger.debug("DEBUG: Attempting to load 'build_req_model' prompt from library")
         system_prompt = PROMPT_LIBRARY.get("build_req_model")
 
@@ -331,22 +392,24 @@ async def build_requirement_model(state: ArtifactState) -> ArtifactState:
             logger.debug("DEBUG: LLM response has no content or content attribute missing")
 
         if diagram_result and diagram_result["success"] and diagram_result["base64_data"]:
-
             artifact_content = RequirementModel(
                 diagram_base64 = diagram_result["base64_data"],
                 diagram_path = diagram_result["path"],
                 uml_fmt_content = uml_chunk
             )
-
             logger.debug(f"DEBUG: Added base64 data to artifact content, length: {len(diagram_result['base64_data'])}")
         
         logger.debug("DEBUG: Creating artifact and conversation objects")
         
-        # Create artifact using factory function with structured content (ONLY ONCE!)
-        artifact = create_artifact(
-            agent=AgentType.ANALYST,
-            artifact_type=ArtifactType.REQ_MODEL,
-            content=artifact_content,  # Use the dict, not Pydantic model
+        # Create artifact with explicit thread_id
+        artifact = Artifact(
+            id="requirements_model_Analyst_v1.0",
+            content=artifact_content,
+            content_type=ArtifactType.REQ_MODEL,
+            created_by=AgentType.ANALYST,
+            version="1.0",
+            thread_id=thread_id,  # EXPLICIT thread_id
+            timestamp=datetime.now(timezone.utc)
         )
         logger.debug(f"DEBUG: Artifact created with ID: {artifact.id}")
         
@@ -376,10 +439,13 @@ async def build_requirement_model(state: ArtifactState) -> ArtifactState:
         return {
             "errors": [f"Requirement model generation failed: {str(e)}"]
         }
-    
-async def write_req_specs(state: ArtifactState) -> ArtifactState:
-    logger.debug(f"DEBUG: Runnign write_req_specs")
+
+async def write_req_specs(state: ArtifactState, config: dict) -> ArtifactState:
+    logger.debug(f"DEBUG: Running write_req_specs")
     try:
+        thread_id = config["configurable"]["thread_id"]
+        print(f"DEBUG: write_req_specs using thread_id: {thread_id}")
+        
         oel_input = """
         1. Device Compatibility
         Must support smartphones (iOS and Android) and optionally tablets.
@@ -405,29 +471,31 @@ async def write_req_specs(state: ArtifactState) -> ArtifactState:
         Minimum RAM usage constraints for smooth operation.
         """
 
-        # manually input OEL first
-        oel_artifact = create_artifact(
-            agent=AgentType.DEPLOYER,
-            artifact_type=ArtifactType.OP_ENV_LIST,
-            content=oel_input,  
+        # manually input OEL first - create with explicit thread_id
+        oel_artifact = Artifact(
+            id="operating_env_list_Deployer_v1.0",
+            content=oel_input,
+            content_type=ArtifactType.OP_ENV_LIST,
+            created_by=AgentType.DEPLOYER,
+            version="1.0",
+            thread_id=thread_id,  # EXPLICIT thread_id
+            timestamp=datetime.now(timezone.utc)
         )
 
         # extract latest versions of OEL, SRL and RM
         latest_system_req = StateManager.get_latest_artifact_by_type(state, ArtifactType.SYSTEM_REQ)
         latest_req_model = StateManager.get_latest_artifact_by_type(state, ArtifactType.REQ_MODEL)
 
-        logger.debug(f"DEBUG: Check for content of latest_system_req: {latest_system_req}")
+        
         system_req_content = await pydantic_to_json_text(latest_system_req.content)
-        logger.debug(f"DEBUG: Check for content of latest_req_model: {latest_req_model}")
+        
         req_model_content = latest_req_model.content
-        logger.debug(f"DEBUG: Check for content of oel_artifact: {oel_artifact}")
+        
         op_env_list_content = oel_artifact.content
 
         system_req_id = latest_system_req.id
         req_model_id = latest_req_model.id
         op_env_list_id = oel_artifact.id
-    
-
 
         llm_with_structured_output = llm.with_structured_output(SoftwareRequirementSpecs)
         system_prompt = PROMPT_LIBRARY.get("write_req_specs")
@@ -438,7 +506,6 @@ async def write_req_specs(state: ArtifactState) -> ArtifactState:
         if not system_prompt:
             raise ValueError("Missing 'write_req_specs' prompt in prompt library.")
         
-        
         response = await llm_with_structured_output.ainvoke(
         [
             SystemMessage(content=prompt_input),
@@ -447,12 +514,15 @@ async def write_req_specs(state: ArtifactState) -> ArtifactState:
         )
         converted_text = await pydantic_to_json_text(response)
 
-
-        # Create artifact using factory function
-        artifact = create_artifact(
-            agent=AgentType.ARCHIVIST,
-            artifact_type=ArtifactType.SW_REQ_SPECS,
-            content=response,  
+        # Create artifact with explicit thread_id
+        artifact = Artifact(
+            id="software_requirement_specs_Archivist_v1.0",
+            content=response,
+            content_type=ArtifactType.SW_REQ_SPECS,
+            created_by=AgentType.ARCHIVIST,
+            version="1.0",
+            thread_id=thread_id,  # EXPLICIT thread_id
+            timestamp=datetime.now(timezone.utc)
         )
         
         # Create conversation entry
@@ -517,12 +587,14 @@ async def verdict_to_revise_SRS(state: ArtifactState) -> str:
         except Exception as e: 
             logger.debug(f"Error in verdict_to_revise_SRS: {e}")
 
-
-async def revise_req_specs(state: ArtifactState) -> ArtifactState: 
-    # 1. retrieve the latest version of validation report
-    latest_val_report = StateManager.get_latest_artifact_by_type(state, ArtifactType.VAL_REPORT)    
-    
-    try: 
+async def revise_req_specs(state: ArtifactState, config: dict) -> ArtifactState:
+    try:
+        thread_id = config["configurable"]["thread_id"]
+        print(f"DEBUG: revise_req_specs using thread_id: {thread_id}")
+        
+        # 1. retrieve the latest version of validation report
+        latest_val_report = StateManager.get_latest_artifact_by_type(state, ArtifactType.VAL_REPORT)    
+        
         if latest_val_report: 
             val_report_content = latest_val_report.content 
             val_report_id = latest_val_report.id
@@ -532,9 +604,7 @@ async def revise_req_specs(state: ArtifactState) -> ArtifactState:
         latest_srs = StateManager.get_latest_artifact_by_type(state, ArtifactType.SW_REQ_SPECS)    
         srs_content = latest_srs.content
         srs_id = latest_srs.id
-        """
-        Do some processing with the content 
-        """
+        
         system_prompt = PROMPT_LIBRARY.get("write_req_specs_with_val_rep")
         prompt_input = system_prompt.format(
             val_report_content=val_report_content, srs_content=srs_content, 
@@ -553,10 +623,18 @@ async def revise_req_specs(state: ArtifactState) -> ArtifactState:
 
         converted_text = await pydantic_to_json_text(response) 
 
-        artifact = create_artifact(
-            agent=AgentType.ARCHIVIST, 
-            artifact_type=ArtifactType.SW_REQ_SPECS, 
+        # Get the current version and increment it
+        current_version = latest_srs.version if hasattr(latest_srs, 'version') else "1.0"
+        new_version = _increment_version(current_version)
+
+        artifact = Artifact(
+            id=f"software_requirement_specs_Archivist_v{new_version}",
             content=response,
+            content_type=ArtifactType.SW_REQ_SPECS,
+            created_by=AgentType.ARCHIVIST,
+            version=new_version,
+            thread_id=thread_id,  # EXPLICIT thread_id
+            timestamp=datetime.now(timezone.utc)
         )
 
         conversation = create_conversation(
@@ -573,12 +651,14 @@ async def revise_req_specs(state: ArtifactState) -> ArtifactState:
             "errors": [f"Classification failed: {str(e)}"]
         }
 
-
-async def handle_routing_decision(state: ArtifactState) -> ArtifactState:
+async def handle_routing_decision(state: ArtifactState, config: dict) -> ArtifactState:
     """
     Handle routing decision with user input from human_request.
     If no human_request is provided, this will cause an interrupt.
     """
+    thread_id = config["configurable"]["thread_id"]
+    print(f"DEBUG: handle_routing_decision using thread_id: {thread_id}")
+    
     logger.debug("DEBUG: --- Handling routing decision ---")
     
     # Check if we have user input from the resumed state
@@ -613,15 +693,246 @@ async def handle_routing_decision(state: ArtifactState) -> ArtifactState:
     return state
 
 def execute_routing_decision(state: ArtifactState) -> str:
-    """Return the chosen node based on user selection."""
-    # Handle case where next_routing_node might not be set during interrupt
-    return getattr(state, 'next_routing_node', 'no')
-
-
-def execute_routing_decision(state: ArtifactState) -> str:
     return state.next_routing_node or 'no'
 
 
+#----------------------------------------- Revision after feedback -------------------------------------------------
+
+async def process_artifact_feedback_direct(state_dict: dict) -> dict:
+    """
+    Process artifact feedback directly without going through the workflow.
+    This function operates on state dictionary and returns updates.
+    """
+    try:
+        artifact_feedback_id = state_dict.get('artifact_feedback_id')
+        artifact_feedback_action = state_dict.get('artifact_feedback_action')
+        artifact_feedback_text = state_dict.get('artifact_feedback_text')
+        
+        if not artifact_feedback_id:
+            return {"errors": ["No artifact feedback ID provided"]}
+        
+        if artifact_feedback_action == "accept":
+            # Create acceptance confirmation
+            conversation = create_conversation(
+                agent=AgentType.SYSTEM,
+                artifact_id=artifact_feedback_id,
+                content=f"✅ Artifact {artifact_feedback_id} has been accepted by the user."
+            )
+            return {"conversations": [conversation]}
+        
+        elif artifact_feedback_action == "feedback":
+            if not artifact_feedback_text:
+                return {"errors": ["No feedback text provided"]}
+            
+            # Find the original artifact in state
+            original_artifact = None
+            artifacts = state_dict.get('artifacts', [])
+            
+            for artifact in artifacts:
+                if artifact.id == artifact_feedback_id:
+                    original_artifact = artifact
+                    break
+            
+            if not original_artifact:
+                return {"errors": [f"Original artifact {artifact_feedback_id} not found"]}
+            
+            # Generate improved version
+            return await generate_improved_artifact_direct(
+                original_artifact, 
+                artifact_feedback_text,
+                state_dict.get('conversations', [])[-1].content if state_dict.get('conversations') else ""
+            )
+        
+        else:
+            return {"errors": [f"Unknown artifact feedback action: {artifact_feedback_action}"]}
+            
+    except Exception as e:
+        logger.error(f"Error processing artifact feedback: {str(e)}")
+        return {"errors": [f"Failed to process artifact feedback: {str(e)}"]}
+
+async def generate_improved_artifact_direct(original_artifact: Artifact, feedback_text: str, user_input: str) -> dict:
+    """
+    Generate improved artifact directly based on feedback using the appropriate generation logic.
+    """
+    try:
+        artifact_type = original_artifact.content_type
+        
+        if artifact_type not in ARTIFACT_REGENERATION_MAP:
+            return {"errors": [f"No regeneration logic for artifact type: {artifact_type}"]}
+        
+        regen_config = ARTIFACT_REGENERATION_MAP[artifact_type]
+        
+        # Get the appropriate system prompt
+        system_prompt = PROMPT_LIBRARY.get(regen_config["prompt_key"])
+        if not system_prompt:
+            return {"errors": [f"Missing prompt '{regen_config['prompt_key']}' in prompt library"]}
+        
+        # Create feedback-enhanced prompt
+        feedback_enhanced_prompt = f"""
+{system_prompt}
+
+IMPORTANT: The user has provided feedback on a previous version of this artifact. 
+Please incorporate the following feedback to improve the output:
+
+User Feedback: "{feedback_text}"
+
+Original Artifact Content: {await pydantic_to_json_text(original_artifact.content) if hasattr(original_artifact.content, 'model_dump') else str(original_artifact.content)}
+
+Please generate an improved version that addresses the user's feedback while maintaining the required structure and format.
+"""
+        
+        # Generate improved artifact based on type
+        if artifact_type == ArtifactType.REQ_MODEL:
+            # Special handling for requirement models with diagrams
+            return await regenerate_requirement_model_direct(
+                feedback_enhanced_prompt, 
+                user_input, 
+                original_artifact
+            )
+        else:
+            # Standard regeneration for other artifact types
+            return await regenerate_standard_artifact_direct(
+                feedback_enhanced_prompt,
+                user_input,
+                original_artifact,
+                regen_config
+            )
+            
+    except Exception as e:
+        logger.error(f"Error regenerating artifact with feedback: {str(e)}")
+        return {"errors": [f"Failed to regenerate artifact: {str(e)}"]}
+
+async def regenerate_standard_artifact_direct(
+    enhanced_prompt: str,
+    user_input: str, 
+    original_artifact: Artifact,
+    regen_config: dict
+) -> dict:
+    """
+    Regenerate standard artifacts (non-diagram) with feedback.
+    """
+    try:
+        # Use structured output for standard artifacts
+        llm_with_structured_output = llm.with_structured_output(regen_config["structured_output"])
+        
+        response = await llm_with_structured_output.ainvoke([
+            SystemMessage(content=enhanced_prompt),
+            HumanMessage(content=user_input)
+        ])
+        
+        converted_text = await pydantic_to_json_text(response)
+        
+        # Get version from original artifact and increment
+        current_version = original_artifact.version if hasattr(original_artifact, 'version') else "1.0"
+        new_version = _increment_version(current_version)
+        
+        # Create artifact manually with incremented version and SAME thread_id
+        new_artifact = Artifact(
+            id=f"{original_artifact.content_type.value}_{regen_config['agent'].value}_v{new_version}",
+            content_type=original_artifact.content_type,
+            created_by=regen_config["agent"],
+            content=response,
+            version=new_version,
+            thread_id=original_artifact.thread_id,  # USE SAME THREAD_ID AS ORIGINAL
+            timestamp=datetime.now(timezone.utc)
+        )
+        
+        print(f"DEBUG FEEDBACK: Created artifact {new_artifact.id}, version: {new_artifact.version}, thread_id: {new_artifact.thread_id}")
+        
+        # Create conversation entry
+        conversation = create_conversation(
+            agent=regen_config["agent"],
+            artifact_id=new_artifact.id,
+            content=f"🔄 Updated {original_artifact.content_type.value} based on user feedback:\n\n{converted_text}"
+        )
+        
+        return {
+            "artifacts": [new_artifact],
+            "conversations": [conversation]
+        }
+        
+    except Exception as e:
+        raise Exception(f"Failed to regenerate standard artifact: {str(e)}")
+
+async def regenerate_requirement_model_direct(
+    enhanced_prompt: str,
+    user_input: str,
+    original_artifact: Artifact
+) -> dict:
+    """
+    Regenerate requirement model with diagram based on feedback.
+    """
+    try:
+        # Generate new response
+        response = await llm.ainvoke([
+            SystemMessage(content=enhanced_prompt),
+            HumanMessage(content=user_input)
+        ])
+        
+        # Extract and generate new diagram
+        uml_chunk = None
+        diagram_result = None
+        diagram_generation_message = "No PlantUML code found in response."
+        
+        if hasattr(response, 'content') and response.content:
+            try:
+                uml_chunk = extract_plantuml(response.content)
+                diagram_result = await generate_use_case_diagram(uml_code=uml_chunk)
+                diagram_generation_message = diagram_result["message"]
+            except ValueError:
+                uml_chunk = None
+                diagram_generation_message = "No PlantUML code found in the LLM response."
+            except Exception as e:
+                diagram_generation_message = f"Error generating diagram: {str(e)}"
+        
+        # Create artifact content
+        if diagram_result and diagram_result["success"] and diagram_result["base64_data"]:
+            artifact_content = RequirementModel(
+                diagram_base64=diagram_result["base64_data"],
+                diagram_path=diagram_result["path"],
+                uml_fmt_content=uml_chunk
+            )
+        else:
+            artifact_content = RequirementModel(
+                diagram_base64=None,
+                diagram_path=None,
+                uml_fmt_content=uml_chunk
+            )
+        
+        current_version = original_artifact.version if hasattr(original_artifact, 'version') else "1.0"
+        new_version = _increment_version(current_version)
+        
+        # Create artifact manually with incremented version and SAME thread_id
+        new_artifact = Artifact(
+            id=f"{ArtifactType.REQ_MODEL.value}_{AgentType.ANALYST.value}_v{new_version}",
+            content_type=ArtifactType.REQ_MODEL,
+            created_by=AgentType.ANALYST,
+            content=artifact_content,
+            version=new_version,
+            thread_id=original_artifact.thread_id,  # USE SAME THREAD_ID AS ORIGINAL
+            timestamp=datetime.now(timezone.utc)
+        )
+        
+        print(f"DEBUG FEEDBACK: Created requirement model {new_artifact.id}, version: {new_artifact.version}, thread_id: {new_artifact.thread_id}")
+        
+        # Create conversation entry
+        conversation_content = f"🔄 Updated requirements model based on user feedback. {diagram_generation_message}"
+        if uml_chunk:
+            conversation_content += "\n\nUpdated UML Code:\n" + uml_chunk[:200] + ("..." if len(uml_chunk) > 200 else "")
+        
+        conversation = create_conversation(
+            agent=AgentType.ANALYST,
+            artifact_id=new_artifact.id,
+            content=conversation_content
+        )
+        
+        return {
+            "artifacts": [new_artifact],
+            "conversations": [conversation]
+        }
+        
+    except Exception as e:
+        raise Exception(f"Failed to regenerate requirement model: {str(e)}")
 
 
 async def setup_state_graph(checkpointer: AsyncSqliteSaver):

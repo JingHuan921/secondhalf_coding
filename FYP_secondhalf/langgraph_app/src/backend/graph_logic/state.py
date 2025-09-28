@@ -1,6 +1,6 @@
 from typing import Annotated, List, Dict, Any, Optional, Union, Literal
 from pydantic import BaseModel, Field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from uuid import UUID, uuid4
 from typing_extensions import TypedDict
@@ -22,6 +22,7 @@ class AgentType(Enum):
     ARCHIVIST = "Archivist"
     REVIEWER = "Reviewer"
     USER = "User"
+    SYSTEM = "System"
 
 class ArtifactType(str, Enum):
     #Deployer 
@@ -48,10 +49,13 @@ class Artifact(BaseModel):
     content_nature: Optional[str] = None #no use, for the sake of integratig
     created_by: AgentType
     version: str = "1.0"
-    #to add later
-
-    thread_id: str = Field(default_factory=lambda: str(uuid4()))
-    timestamp:datetime = Field(default_factory=datetime.utcnow)
+    
+    # CHANGED: Remove default factory to force explicit thread_id setting
+    thread_id: str  # Must be explicitly provided
+    
+    # CHANGED: Use timezone-aware timestamp
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    
     #for potential RAG 
     embedding_id: Optional[str] = None 
 
@@ -60,7 +64,8 @@ class Conversation(BaseModel):
     agent: Optional[AgentType] = None
     artifact_id: Optional [str] = None
     content: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    # CHANGED: Use timezone-aware timestamp  
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 # User will input this to resume after interrupt
@@ -110,45 +115,60 @@ class GraphResponse(BaseModel):
 
 
 # Custom Reducer Functions
+# Replace your add_artifacts function in state.py with this fixed version:
 def add_artifacts(existing: List[Artifact], new: List[Artifact]) -> List[Artifact]:
-    """
-    Add new artifacts with intelligent versioning:
-    - If same type but different content: increment version and add both
-    - If same type and same content but different agent: also increment a version
-    - If different type: always add
-    - If completely new: add as version 1.0
-    """
-    if not new:
-        return existing
+    """Add new artifacts to existing ones, avoiding duplicates and handling timezone-aware/naive datetimes"""
     
-    result = existing.copy()
-    
-    for new_artifact in new:
-        # Find existing artifacts of the same type
-        same_type_artifacts = [a for a in result if a.content_type == new_artifact.content_type]
+    def normalize_timestamp(timestamp):
+        """Convert timestamp to timezone-aware datetime for consistent comparison"""
+        if timestamp is None:
+            return datetime.now(timezone.utc)
         
-        if not same_type_artifacts:
-            # No existing artifacts of this type - add as-is
-            result.append(new_artifact)
+        if isinstance(timestamp, str):
+            # Parse string timestamp
+            try:
+                # Try parsing with timezone info first
+                if timestamp.endswith('Z'):
+                    timestamp = timestamp[:-1] + '+00:00'
+                dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                
+                # If it's naive, make it UTC
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt
+            except ValueError:
+                # Fallback to current time if parsing fails
+                return datetime.now(timezone.utc)
+        
+        elif isinstance(timestamp, datetime):
+            # If it's naive, assume UTC
+            if timestamp.tzinfo is None:
+                return timestamp.replace(tzinfo=timezone.utc)
+            return timestamp
+        
         else:
-            # Same type but different content - create new version
-            latest_version = _get_latest_version(same_type_artifacts)
-            new_version = _increment_version(latest_version)
-            
-            # Create new artifact with incremented version
-            updated_artifact = _create_versioned_artifact(new_artifact, new_version)
-            result.append(updated_artifact)
-            pending_result = result
-            seen = set()
-            result = [] 
-            for item in pending_result: 
-                key = (item.id, item.timestamp)
-                if key not in seen: 
-                    seen.add(key) 
-                    result.append(item)
+            # Fallback for any other type
+            return datetime.now(timezone.utc)
     
-    # Sort by type, then by version for consistent ordering
-    return sorted(result, key=lambda a: a.timestamp)
+    # Create a set of existing artifact IDs for quick lookup
+    existing_ids = {artifact.id for artifact in existing}
+    
+    # Combine existing and new artifacts, avoiding duplicates
+    result = list(existing)  # Start with existing artifacts
+    
+    for artifact in new:
+        if artifact.id not in existing_ids:
+            result.append(artifact)
+    
+    # Sort by normalized timestamp (newest first)
+    try:
+        result = sorted(result, key=lambda a: normalize_timestamp(a.timestamp), reverse=True)
+    except Exception as e:
+        print(f"Warning: Error sorting artifacts by timestamp: {e}")
+        # If sorting fails, just return unsorted result
+        pass
+    
+    return result
 
 def _get_latest_version(artifacts: List[Artifact]) -> str:
     """
@@ -256,7 +276,7 @@ def update_error_log(existing: List[str], new: List[str]) -> List[str]:
     if not new:
         return existing
     
-    timestamp = datetime.utcnow().isoformat()
+    timestamp = datetime.now().isoformat()
     timestamped_errors = [f"[{timestamp}] {error}" for error in new]
     return existing + timestamped_errors
 
@@ -280,7 +300,7 @@ class ArtifactState(BaseModel):
     errors: Annotated[List[str], update_error_log] = Field(default_factory=list)
     
     # Session info (behavior)
-    started_at: datetime = Field(default_factory=datetime.utcnow)
+    started_at: datetime = Field(default_factory=lambda: datetime.now())
 
 
 # Helper Functions for State Management
@@ -349,11 +369,12 @@ def create_artifact(
     agent: AgentType,
     artifact_type: ArtifactType,
     content: Optional[Union[RequirementsClassificationList, SystemRequirementsList, RequirementModel, str]] = None,
-    version: str= "1.0"
+    version: str= "1.0", 
+    thread_id: str = None,
 ) -> Artifact:
     
     """Factory function to create artifacts with proper metadata"""
-    timestamp = datetime.utcnow()
+    timestamp = datetime.now(timezone.utc).isoformat()
 
     artifact_id = StateManager.create_artifact_id(agent, artifact_type, version=version)
     
@@ -370,7 +391,7 @@ def create_conversation(
     content: str,
 ) -> Conversation:
     
-    timestamp = datetime.utcnow()
+    timestamp = datetime.now(timezone.utc).isoformat()
         
     return Conversation(
         timestamp = timestamp,

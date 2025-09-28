@@ -37,7 +37,7 @@ async def lifespan(app: FastAPI):
 
     print("--- Application starting up... ---")
 
-    # ✅ DELETE ALL SQLITE-RELATED FILES (including WAL files)
+    # DELETE ALL SQLITE-RELATED FILES (including WAL files)
     sqlite_files = [
         CONN_STRING,
         CONN_STRING + "-shm",

@@ -389,11 +389,11 @@ async def write_req_specs(state: ArtifactState) -> ArtifactState:
         latest_system_req = StateManager.get_latest_artifact_by_type(state, ArtifactType.SYSTEM_REQ)
         latest_req_model = StateManager.get_latest_artifact_by_type(state, ArtifactType.REQ_MODEL)
 
-        logger.debug(f"DEBUG: Check for content of latest_system_req: {latest_system_req}")
+        
         system_req_content = await pydantic_to_json_text(latest_system_req.content)
-        logger.debug(f"DEBUG: Check for content of latest_req_model: {latest_req_model}")
+        
         req_model_content = latest_req_model.content
-        logger.debug(f"DEBUG: Check for content of oel_artifact: {oel_artifact}")
+        
         op_env_list_content = oel_artifact.content
 
         system_req_id = latest_system_req.id
