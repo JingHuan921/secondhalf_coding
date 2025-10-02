@@ -1,12 +1,12 @@
-from typing import Literal, List
+from typing import Literal, List, Optional
 from enum import Enum
-from pydantic import BaseModel, Field 
+from pydantic import BaseModel, Field
 
 from .shared import *
 
 
 
-class SoftwareRequirementSpecs(BaseModel): 
+class SoftwareRequirementSpecs(BaseModel):
     """Response to the user for a Software Requirement Specs (SRS)"""
     brief_introduction: str
     product_description: str
@@ -14,3 +14,4 @@ class SoftwareRequirementSpecs(BaseModel):
     non_functional_requirements: str
     reference_documents_id: List[str]
     references: str
+    summary: Optional[str] = Field(default=None, description="Brief one-sentence summary of the software requirement specs")

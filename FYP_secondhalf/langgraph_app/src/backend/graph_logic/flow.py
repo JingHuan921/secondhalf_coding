@@ -195,9 +195,15 @@ async def classify_user_requirements(state: ArtifactState, config: dict) -> Arti
         ]
         )
         print(f"DEBUG: LLM response received successfully")
-        
-        converted_text = await pydantic_to_json_text(response)
-        print(f"DEBUG: Converted text generated successfully")
+
+        # Extract summary for conversation
+        summary = response.summary
+        print(f"DEBUG: Extracted summary: {summary}")
+
+        # Create artifact content without summary using model_dump and exclude
+        artifact_dict = response.model_dump(exclude={'summary'})
+        artifact_content = RequirementsClassificationList(**artifact_dict)
+        print(f"DEBUG: Created artifact content without summary")
 
         # Check for existing artifacts of same type and increment version
         latest_artifact = StateManager.get_latest_artifact_by_type(state, ArtifactType.REQ_CLASS)
@@ -212,21 +218,21 @@ async def classify_user_requirements(state: ArtifactState, config: dict) -> Arti
         artifact = create_artifact(
             agent=AgentType.ANALYST,
             artifact_type=ArtifactType.REQ_CLASS,
-            content=response,
+            content=artifact_content,
             version=new_version,
             thread_id=thread_id,
 
         )
-        
+
         print(f"DEBUG: About to return artifact: {artifact.id} with thread_id: {artifact.thread_id}")
         print(f"DEBUG: Artifact content type: {artifact.content_type}")
         print(f"DEBUG: Artifact created by: {artifact.created_by}")
-        
-        # Create conversation entry
+
+        # Create conversation entry using summary
         conversation = create_conversation(
             agent=AgentType.ANALYST,
             artifact_id=artifact.id,
-            content=converted_text
+            content=summary
         )
         
         print(f"DEBUG: Conversation created with artifact_id: {conversation.artifact_id}")
@@ -265,7 +271,13 @@ async def write_system_requirement(state: ArtifactState, config: dict) -> Artifa
             HumanMessage(content=state.conversations[-1].content)
         ]
         )
-        converted_text = await pydantic_to_json_text(response)
+
+        # Extract summary for conversation
+        summary = response.summary
+
+        # Create artifact content without summary using model_dump and exclude
+        artifact_dict = response.model_dump(exclude={'summary'})
+        artifact_content = SystemRequirementsList(**artifact_dict)
 
         # Check for existing artifacts of same type and increment version
         latest_artifact = StateManager.get_latest_artifact_by_type(state, ArtifactType.SYSTEM_REQ)
@@ -281,16 +293,16 @@ async def write_system_requirement(state: ArtifactState, config: dict) -> Artifa
         artifact = create_artifact(
             agent=AgentType.ANALYST,
             artifact_type=ArtifactType.SYSTEM_REQ,
-            content=response,
+            content=artifact_content,
             version=new_version,
             thread_id=thread_id,
 
         )
-        # Create conversation entry
+        # Create conversation entry using summary
         conversation = create_conversation(
             agent=AgentType.ANALYST,
             artifact_id=artifact.id,
-            content=converted_text
+            content=summary
         )
 
         return {
@@ -407,14 +419,33 @@ async def build_requirement_model(state: ArtifactState, config: dict) -> Artifac
         else:
             logger.debug("DEBUG: LLM response has no content or content attribute missing")
 
+        # Note: For RequirementModel, we don't use structured_output, so we create it manually
+        # We'll generate a simple summary for the conversation
+        summary = "Requirements model with use case diagram generated successfully."
+
+        # Create artifact content based on whether diagram generation succeeded
         if diagram_result and diagram_result["success"] and diagram_result["base64_data"]:
             artifact_content = RequirementModel(
                 diagram_base64 = diagram_result["base64_data"],
                 diagram_path = diagram_result["path"],
-                uml_fmt_content = uml_chunk
+                uml_fmt_content = uml_chunk,
+                summary = summary  # Include summary here temporarily
             )
             logger.debug(f"DEBUG: Added base64 data to artifact content, length: {len(diagram_result['base64_data'])}")
-        
+        else:
+            # Create artifact with no diagram if generation failed
+            artifact_content = RequirementModel(
+                diagram_base64 = None,
+                diagram_path = None,
+                uml_fmt_content = uml_chunk,
+                summary = summary
+            )
+            logger.debug(f"DEBUG: Diagram generation failed, creating artifact without diagram")
+
+        # Exclude summary from artifact content using model_dump and exclude
+        artifact_dict = artifact_content.model_dump(exclude={'summary'})
+        artifact_content_without_summary = RequirementModel(**artifact_dict)
+
         logger.debug("DEBUG: Creating artifact and conversation objects")
 
         # Check for existing artifacts of same type and increment version
@@ -430,7 +461,7 @@ async def build_requirement_model(state: ArtifactState, config: dict) -> Artifac
         artifact = create_artifact(
             agent=AgentType.ANALYST,
             artifact_type=ArtifactType.REQ_MODEL,
-            content=artifact_content,
+            content=artifact_content_without_summary,
             version=new_version,
             thread_id=thread_id,
 
@@ -438,16 +469,12 @@ async def build_requirement_model(state: ArtifactState, config: dict) -> Artifac
 
 
         logger.debug(f"DEBUG: Artifact created with ID: {artifact.id}")
-        
-        # Create conversation entry - use the generation message for display
-        conversation_content = f"Requirements model generated. {diagram_generation_message}"
-        if uml_chunk:
-            conversation_content += "\n\nUML Code:\n" + uml_chunk[:200] + ("..." if len(uml_chunk) > 200 else "")
-        
+
+        # Create conversation entry using summary
         conversation = create_conversation(
             agent=AgentType.ANALYST,
             artifact_id=artifact.id,
-            content=conversation_content,
+            content=summary,
         )
         logger.debug(f"DEBUG: Conversation entry created for artifact: {artifact.id}")
 
@@ -538,7 +565,13 @@ async def write_req_specs(state: ArtifactState, config: dict) -> ArtifactState:
             HumanMessage(content=state.conversations[-1].content)
         ]
         )
-        converted_text = await pydantic_to_json_text(response)
+
+        # Extract summary for conversation
+        summary = response.summary
+
+        # Create artifact content without summary using model_dump and exclude
+        artifact_dict = response.model_dump(exclude={'summary'})
+        artifact_content = SoftwareRequirementSpecs(**artifact_dict)
 
         # Check for existing artifacts of same type and increment version
         latest_artifact = StateManager.get_latest_artifact_by_type(state, ArtifactType.SW_REQ_SPECS)
@@ -554,17 +587,17 @@ async def write_req_specs(state: ArtifactState, config: dict) -> ArtifactState:
         artifact = create_artifact(
             agent=AgentType.ARCHIVIST,
             artifact_type=ArtifactType.SW_REQ_SPECS,
-            content=response,
+            content=artifact_content,
             version=new_version,
             thread_id=thread_id,
 
         )
 
-        # Create conversation entry
+        # Create conversation entry using summary
         conversation = create_conversation(
             agent=AgentType.ARCHIVIST,
             artifact_id=artifact.id,
-            content=converted_text,
+            content=summary,
         )
 
         return {
@@ -651,28 +684,33 @@ async def revise_req_specs(state: ArtifactState, config: dict) -> ArtifactState:
         llm_with_structured_output = llm.with_structured_output(SoftwareRequirementSpecs)
         response = await llm_with_structured_output.ainvoke(
             [
-                SystemMessage(content=prompt_input), 
+                SystemMessage(content=prompt_input),
                 HumanMessage(content=state.conversations[-1].content)
             ]
         )
 
-        converted_text = await pydantic_to_json_text(response) 
+        # Extract summary for conversation
+        summary = response.summary
+
+        # Create artifact content without summary using model_dump and exclude
+        artifact_dict = response.model_dump(exclude={'summary'})
+        artifact_content = SoftwareRequirementSpecs(**artifact_dict)
 
         latest_srs = StateManager.get_latest_artifact_by_type(state, ArtifactType.SW_REQ_SPECS)
         new_version = _increment_version(latest_srs.version)
 
         artifact = create_artifact(
             agent=AgentType.ARCHIVIST,
-            artifact_type=ArtifactType.SW_REQ_SPECS, 
-            content=response,
+            artifact_type=ArtifactType.SW_REQ_SPECS,
+            content=artifact_content,
             version=new_version,
             thread_id=thread_id,
         )
 
         conversation = create_conversation(
-            agent=AgentType.ARCHIVIST, 
-            artifact_id = artifact.id, 
-            content=converted_text,
+            agent=AgentType.ARCHIVIST,
+            artifact_id = artifact.id,
+            content=summary,
         )
         return {
             "artifacts": [artifact], 
@@ -851,31 +889,36 @@ async def regenerate_standard_artifact_direct(
             SystemMessage(content=enhanced_prompt),
             HumanMessage(content=user_input)
         ])
-        
-        converted_text = await pydantic_to_json_text(response)
-        
+
+        # Extract summary for conversation
+        summary = response.summary
+
+        # Create artifact content without summary using model_dump and exclude
+        artifact_dict = response.model_dump(exclude={'summary'})
+        artifact_content = regen_config["structured_output"](**artifact_dict)
+
         # Get version from original artifact and increment
         current_version = original_artifact.version or "1.0"
         new_version = _increment_version(current_version)
         logger.debug(f"DEBUG: The new version of regenerated standard artifact is {new_version}")
-        
+
         new_artifact = create_artifact(
             agent=regen_config["agent"],
             artifact_type=original_artifact.content_type,
-            content=response,
+            content=artifact_content,
             version=new_version,
             thread_id=original_artifact.thread_id,
         )
         logger.debug(f"DEBUG REGEN: current version is {current_version}, new version is {new_version}")
         logger.debug(f"DEBUG REGEN: Created artifact with ID={new_artifact.id}, version={new_artifact.version}")
 
-        
-        
-        # Create conversation entry
+
+
+        # Create conversation entry using summary with feedback indicator
         conversation = create_conversation(
             agent=regen_config["agent"],
             artifact_id=new_artifact.id,
-            content=f"🔄 Updated {original_artifact.content_type.value} based on user feedback:\n\n{converted_text}"
+            content=f"🔄 Updated based on feedback: {summary}"
         )
         
         return {
@@ -904,33 +947,39 @@ async def regenerate_requirement_model_direct(
         # Extract and generate new diagram
         uml_chunk = None
         diagram_result = None
-        diagram_generation_message = "No PlantUML code found in response."
-        
+
         if hasattr(response, 'content') and response.content:
             try:
                 uml_chunk = extract_plantuml(response.content)
                 diagram_result = await generate_use_case_diagram(uml_code=uml_chunk)
-                diagram_generation_message = diagram_result["message"]
             except ValueError:
                 uml_chunk = None
-                diagram_generation_message = "No PlantUML code found in the LLM response."
             except Exception as e:
-                diagram_generation_message = f"Error generating diagram: {str(e)}"
-        
+                logger.error(f"Error generating diagram: {str(e)}")
+
+        # Create summary for conversation
+        summary = "🔄 Updated requirements model based on user feedback."
+
         # Create artifact content
         if diagram_result and diagram_result["success"] and diagram_result["base64_data"]:
             artifact_content = RequirementModel(
                 diagram_base64=diagram_result["base64_data"],
                 diagram_path=diagram_result["path"],
-                uml_fmt_content=uml_chunk
+                uml_fmt_content=uml_chunk,
+                summary=summary
             )
         else:
             artifact_content = RequirementModel(
                 diagram_base64=None,
                 diagram_path=None,
-                uml_fmt_content=uml_chunk
+                uml_fmt_content=uml_chunk,
+                summary=summary
             )
-        
+
+        # Exclude summary from artifact using model_dump and exclude
+        artifact_dict = artifact_content.model_dump(exclude={'summary'})
+        artifact_content_without_summary = RequirementModel(**artifact_dict)
+
         current_version = original_artifact.version if hasattr(original_artifact, 'version') else "1.0"
         new_version = _increment_version(current_version)
         logger.debug(f"DEBUG REGEN: current version is {current_version}, new version is {new_version}")
@@ -938,24 +987,20 @@ async def regenerate_requirement_model_direct(
         new_artifact = create_artifact(
             agent=AgentType.ANALYST,
             artifact_type=ArtifactType.REQ_MODEL,
-            content=artifact_content,
+            content=artifact_content_without_summary,
             version=new_version,
             thread_id=original_artifact.thread_id,
         )
         logger.debug(f"DEBUG REGEN REQ_MODEL: Created artifact with ID={new_artifact.id}, version={new_artifact.version}")
 
-        
+
         print(f"DEBUG FEEDBACK: Created requirement model {new_artifact.id}, version: {new_artifact.version}, thread_id: {new_artifact.thread_id}")
-        
-        # Create conversation entry
-        conversation_content = f"🔄 Updated requirements model based on user feedback. {diagram_generation_message}"
-        if uml_chunk:
-            conversation_content += "\n\nUpdated UML Code:\n" + uml_chunk[:200] + ("..." if len(uml_chunk) > 200 else "")
-        
+
+        # Create conversation entry using summary
         conversation = create_conversation(
             agent=AgentType.ANALYST,
             artifact_id=new_artifact.id,
-            content=conversation_content
+            content=summary
         )
         
         return {

@@ -1,6 +1,6 @@
-from typing import Literal, List
+from typing import Literal, List, Optional
 from enum import Enum
-from pydantic import BaseModel, Field 
+from pydantic import BaseModel, Field
 
 from .shared import *
 
@@ -12,3 +12,4 @@ class SystemRequirement(BaseModel):
 
 class SystemRequirementsList(BaseModel):
     srl: List[SystemRequirement]
+    summary: Optional[str] = Field(default=None, description="Brief one-sentence summary of the system requirements")

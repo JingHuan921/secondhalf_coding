@@ -339,7 +339,7 @@ const ArtifactContentViewer = ({ artifact, onClose }: { artifact: ArtifactInfo &
         </div>
         
         <div className="border-t p-4 flex justify-between items-center">
-          <div className="text-sm text-gray-600">
+          <div className="text-sm text-white">
             Created by {artifact.agent} • {formatTimestamp(artifact.timestamp)}
           </div>
           <Button variant="outline" size="sm">
