@@ -396,7 +396,7 @@ const ArtifactCard = ({
       </CardHeader>
       <CardContent className="pt-0">
         <div className="space-y-2">
-          <div className="text-xs text-gray-600 truncate">
+          <div className="text-xs text-gray-600 whitespace-normal break-words">
             ID: {artifact.id}
           </div>
           {hasDiagram && (
@@ -407,7 +407,7 @@ const ArtifactCard = ({
           <div className="flex space-x-2">
             <Button 
               size="sm" 
-              className="h-7 text-xs flex-1 bg-gray-100 hover:bg-gray-200 text-gray-900 border border-gray-300 font-medium"
+              className="h-7 text-xs flex-1 bg-gray-100 hover:bg-gray-200 text-white border border-gray-300 font-medium"
             >
               <EyeIcon className="h-3 w-3 mr-1" />
               {hasDiagram ? "View Diagram & Code" : "View Content"}
@@ -536,8 +536,16 @@ const InputDemo = () => {
 
   // Handle artifact accept
   const handleArtifactAccept = async (artifactId: string) => {
-    if (!conversationState?.threadId) return;
-    
+    console.log("handleArtifactAccept called with artifactId:", artifactId);
+    console.log("conversationState?.threadId:", conversationState?.threadId);
+
+    if (!conversationState?.threadId) {
+      console.error("No threadId available, cannot accept artifact");
+      return;
+    }
+
+    console.log("About to send artifact feedback for accept");
+
     // Add user message for accept action
     const acceptMessage: ConversationMessage = {
       role: "user",
@@ -551,7 +559,7 @@ const InputDemo = () => {
     };
 
     setConversationState(updatedState);
-    
+
     try {
       await sendArtifactFeedback(
         conversationState.threadId,
@@ -693,13 +701,14 @@ const InputDemo = () => {
     };
 
     // Update state to include the user choice
-    setConversationState({
+    const updatedState = {
       ...conversationState,
       messages: [...conversationState.messages, userChoiceMessage]
-    });
+    };
+    setConversationState(updatedState);
 
     try {
-      await sendRoutingChoice(conversationState.threadId, choice, handleStateUpdate);
+      await sendRoutingChoice(conversationState.threadId, choice, handleStateUpdate, updatedState);
     } catch (error) {
       console.error("Error sending routing choice:", error);
     }
@@ -816,15 +825,23 @@ const InputDemo = () => {
                   <p className="text-sm text-gray-700 mt-2">Do you want to accept this artifact or provide feedback for improvements?</p>
                 </div>
                 <div className="flex gap-2 w-full max-w-sm">
-                  <Button 
-                    onClick={() => handleArtifactAccept(conversationState?.pendingFeedbackArtifactId || '')}
+                  <Button
+                    onClick={() => {
+                      console.log("Accept button clicked");
+                      console.log("pendingFeedbackArtifactId from state:", conversationState?.pendingFeedbackArtifactId);
+                      handleArtifactAccept(conversationState?.pendingFeedbackArtifactId || '');
+                    }}
                     className="flex-1 bg-green-600 hover:bg-green-700 text-white"
                   >
                     <CheckIcon className="h-4 w-4 mr-2" />
                     Accept
                   </Button>
-                  <Button 
-                    onClick={() => handleArtifactFeedbackStart(conversationState?.pendingFeedbackArtifactId || '')}
+                  <Button
+                    onClick={() => {
+                      console.log("Feedback button clicked");
+                      console.log("pendingFeedbackArtifactId from state:", conversationState?.pendingFeedbackArtifactId);
+                      handleArtifactFeedbackStart(conversationState?.pendingFeedbackArtifactId || '');
+                    }}
                     className="flex-1 bg-orange-600 hover:bg-orange-700 text-white"
                   >
                     <MessageSquareIcon className="h-4 w-4 mr-2" />
@@ -847,7 +864,7 @@ const InputDemo = () => {
                     <Button
                       key={choice.value}
                       onClick={() => handleRoutingChoice(choice.value)}
-                      className="w-full text-left justify-start bg-gray-100 hover:bg-gray-200 text-gray-900 border border-gray-300 font-medium"
+                      className="w-full text-left justify-start bg-gray-100 hover:bg-gray-200 text-white border border-gray-300 font-medium"
                     >
                       {choice.label}
                     </Button>

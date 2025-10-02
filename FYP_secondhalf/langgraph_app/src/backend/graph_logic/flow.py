@@ -199,15 +199,23 @@ async def classify_user_requirements(state: ArtifactState, config: dict) -> Arti
         converted_text = await pydantic_to_json_text(response)
         print(f"DEBUG: Converted text generated successfully")
 
-        # Create artifact using factory function with explicit thread_id
-        artifact = Artifact(
-            id="requirements_classification_Analyst_v1.0",
+        # Check for existing artifacts of same type and increment version
+        latest_artifact = StateManager.get_latest_artifact_by_type(state, ArtifactType.REQ_CLASS)
+        if latest_artifact:
+            current_version = latest_artifact.version or "1.0"
+            new_version = _increment_version(current_version)
+            print(f"DEBUG: Found existing REQ_CLASS v{current_version}, creating v{new_version}")
+        else:
+            new_version = "1.0"
+            print(f"DEBUG: No existing REQ_CLASS found, creating v{new_version}")
+
+        artifact = create_artifact(
+            agent=AgentType.ANALYST,
+            artifact_type=ArtifactType.REQ_CLASS,
             content=response,
-            content_type=ArtifactType.REQ_CLASS,
-            created_by=AgentType.ANALYST,
-            version="1.0",
-            thread_id=thread_id,  # EXPLICIT thread_id
-            timestamp=datetime.now(timezone.utc)
+            version=new_version,
+            thread_id=thread_id,
+
         )
         
         print(f"DEBUG: About to return artifact: {artifact.id} with thread_id: {artifact.thread_id}")
@@ -259,17 +267,25 @@ async def write_system_requirement(state: ArtifactState, config: dict) -> Artifa
         )
         converted_text = await pydantic_to_json_text(response)
 
+        # Check for existing artifacts of same type and increment version
+        latest_artifact = StateManager.get_latest_artifact_by_type(state, ArtifactType.SYSTEM_REQ)
+        if latest_artifact:
+            current_version = latest_artifact.version or "1.0"
+            new_version = _increment_version(current_version)
+            print(f"DEBUG: Found existing SYSTEM_REQ v{current_version}, creating v{new_version}")
+        else:
+            new_version = "1.0"
+            print(f"DEBUG: No existing SYSTEM_REQ found, creating v{new_version}")
+
         # Create artifact with explicit thread_id
-        artifact = Artifact(
-            id="system_requirements_Analyst_v1.0",
+        artifact = create_artifact(
+            agent=AgentType.ANALYST,
+            artifact_type=ArtifactType.SYSTEM_REQ,
             content=response,
-            content_type=ArtifactType.SYSTEM_REQ,
-            created_by=AgentType.ANALYST,
-            version="1.0",
-            thread_id=thread_id,  # EXPLICIT thread_id
-            timestamp=datetime.now(timezone.utc)
+            version=new_version,
+            thread_id=thread_id,
+
         )
-        
         # Create conversation entry
         conversation = create_conversation(
             agent=AgentType.ANALYST,
@@ -400,17 +416,27 @@ async def build_requirement_model(state: ArtifactState, config: dict) -> Artifac
             logger.debug(f"DEBUG: Added base64 data to artifact content, length: {len(diagram_result['base64_data'])}")
         
         logger.debug("DEBUG: Creating artifact and conversation objects")
-        
-        # Create artifact with explicit thread_id
-        artifact = Artifact(
-            id="requirements_model_Analyst_v1.0",
+
+        # Check for existing artifacts of same type and increment version
+        latest_artifact = StateManager.get_latest_artifact_by_type(state, ArtifactType.REQ_MODEL)
+        if latest_artifact:
+            current_version = latest_artifact.version or "1.0"
+            new_version = _increment_version(current_version)
+            logger.debug(f"DEBUG: Found existing REQ_MODEL v{current_version}, creating v{new_version}")
+        else:
+            new_version = "1.0"
+            logger.debug(f"DEBUG: No existing REQ_MODEL found, creating v{new_version}")
+
+        artifact = create_artifact(
+            agent=AgentType.ANALYST,
+            artifact_type=ArtifactType.REQ_MODEL,
             content=artifact_content,
-            content_type=ArtifactType.REQ_MODEL,
-            created_by=AgentType.ANALYST,
-            version="1.0",
-            thread_id=thread_id,  # EXPLICIT thread_id
-            timestamp=datetime.now(timezone.utc)
+            version=new_version,
+            thread_id=thread_id,
+
         )
+
+
         logger.debug(f"DEBUG: Artifact created with ID: {artifact.id}")
         
         # Create conversation entry - use the generation message for display
@@ -514,24 +540,33 @@ async def write_req_specs(state: ArtifactState, config: dict) -> ArtifactState:
         )
         converted_text = await pydantic_to_json_text(response)
 
+        # Check for existing artifacts of same type and increment version
+        latest_artifact = StateManager.get_latest_artifact_by_type(state, ArtifactType.SW_REQ_SPECS)
+        if latest_artifact:
+            current_version = latest_artifact.version or "1.0"
+            new_version = _increment_version(current_version)
+            print(f"DEBUG: Found existing SW_REQ_SPECS v{current_version}, creating v{new_version}")
+        else:
+            new_version = "1.0"
+            print(f"DEBUG: No existing SW_REQ_SPECS found, creating v{new_version}")
+
         # Create artifact with explicit thread_id
-        artifact = Artifact(
-            id="software_requirement_specs_Archivist_v1.0",
+        artifact = create_artifact(
+            agent=AgentType.ARCHIVIST,
+            artifact_type=ArtifactType.SW_REQ_SPECS,
             content=response,
-            content_type=ArtifactType.SW_REQ_SPECS,
-            created_by=AgentType.ARCHIVIST,
-            version="1.0",
-            thread_id=thread_id,  # EXPLICIT thread_id
-            timestamp=datetime.now(timezone.utc)
+            version=new_version,
+            thread_id=thread_id,
+
         )
-        
+
         # Create conversation entry
         conversation = create_conversation(
             agent=AgentType.ARCHIVIST,
             artifact_id=artifact.id,
             content=converted_text,
         )
-        
+
         return {
             "artifacts": [artifact],  
             "conversations": [conversation],  
@@ -623,18 +658,15 @@ async def revise_req_specs(state: ArtifactState, config: dict) -> ArtifactState:
 
         converted_text = await pydantic_to_json_text(response) 
 
-        # Get the current version and increment it
-        current_version = latest_srs.version if hasattr(latest_srs, 'version') else "1.0"
-        new_version = _increment_version(current_version)
+        latest_srs = StateManager.get_latest_artifact_by_type(state, ArtifactType.SW_REQ_SPECS)
+        new_version = _increment_version(latest_srs.version)
 
-        artifact = Artifact(
-            id=f"software_requirement_specs_Archivist_v{new_version}",
+        artifact = create_artifact(
+            agent=AgentType.ARCHIVIST,
+            artifact_type=ArtifactType.SW_REQ_SPECS, 
             content=response,
-            content_type=ArtifactType.SW_REQ_SPECS,
-            created_by=AgentType.ARCHIVIST,
             version=new_version,
-            thread_id=thread_id,  # EXPLICIT thread_id
-            timestamp=datetime.now(timezone.utc)
+            thread_id=thread_id,
         )
 
         conversation = create_conversation(
@@ -658,24 +690,24 @@ async def handle_routing_decision(state: ArtifactState, config: dict) -> Artifac
     """
     thread_id = config["configurable"]["thread_id"]
     print(f"DEBUG: handle_routing_decision using thread_id: {thread_id}")
-    
+
     logger.debug("DEBUG: --- Handling routing decision ---")
-    
+
     # Check if we have user input from the resumed state
     if hasattr(state, 'next_routing_node') and state.next_routing_node:
         user_choice = state.next_routing_node
         print(f"DEBUG: Using user choice from human_request: {user_choice}")
-        
+
         # Validate the choice
         valid_choices = [
             "classify_user_requirements",
-            "write_system_requirement", 
+            "write_system_requirement",
             "build_requirement_model",
             "write_req_specs",
-            "revise_req_specs", 
+            "revise_req_specs",
             "no"
         ]
-        
+
         if user_choice in valid_choices:
             state.next_routing_node = user_choice
             # Clear the human_request after processing
@@ -689,7 +721,7 @@ async def handle_routing_decision(state: ArtifactState, config: dict) -> Artifac
         logger.debug("DEBUG: No user input available, graph will be interrupted")
         # Don't set next_routing_node - let the interrupt happen
         pass
-    
+
     return state
 
 def execute_routing_decision(state: ArtifactState) -> str:
@@ -823,21 +855,21 @@ async def regenerate_standard_artifact_direct(
         converted_text = await pydantic_to_json_text(response)
         
         # Get version from original artifact and increment
-        current_version = original_artifact.version if hasattr(original_artifact, 'version') else "1.0"
+        current_version = original_artifact.version or "1.0"
         new_version = _increment_version(current_version)
+        logger.debug(f"DEBUG: The new version of regenerated standard artifact is {new_version}")
         
-        # Create artifact manually with incremented version and SAME thread_id
-        new_artifact = Artifact(
-            id=f"{original_artifact.content_type.value}_{regen_config['agent'].value}_v{new_version}",
-            content_type=original_artifact.content_type,
-            created_by=regen_config["agent"],
+        new_artifact = create_artifact(
+            agent=regen_config["agent"],
+            artifact_type=original_artifact.content_type,
             content=response,
             version=new_version,
-            thread_id=original_artifact.thread_id,  # USE SAME THREAD_ID AS ORIGINAL
-            timestamp=datetime.now(timezone.utc)
+            thread_id=original_artifact.thread_id,
         )
+        logger.debug(f"DEBUG REGEN: current version is {current_version}, new version is {new_version}")
+        logger.debug(f"DEBUG REGEN: Created artifact with ID={new_artifact.id}, version={new_artifact.version}")
+
         
-        print(f"DEBUG FEEDBACK: Created artifact {new_artifact.id}, version: {new_artifact.version}, thread_id: {new_artifact.thread_id}")
         
         # Create conversation entry
         conversation = create_conversation(
@@ -901,17 +933,17 @@ async def regenerate_requirement_model_direct(
         
         current_version = original_artifact.version if hasattr(original_artifact, 'version') else "1.0"
         new_version = _increment_version(current_version)
-        
-        # Create artifact manually with incremented version and SAME thread_id
-        new_artifact = Artifact(
-            id=f"{ArtifactType.REQ_MODEL.value}_{AgentType.ANALYST.value}_v{new_version}",
-            content_type=ArtifactType.REQ_MODEL,
-            created_by=AgentType.ANALYST,
+        logger.debug(f"DEBUG REGEN: current version is {current_version}, new version is {new_version}")
+
+        new_artifact = create_artifact(
+            agent=AgentType.ANALYST,
+            artifact_type=ArtifactType.REQ_MODEL,
             content=artifact_content,
             version=new_version,
-            thread_id=original_artifact.thread_id,  # USE SAME THREAD_ID AS ORIGINAL
-            timestamp=datetime.now(timezone.utc)
+            thread_id=original_artifact.thread_id,
         )
+        logger.debug(f"DEBUG REGEN REQ_MODEL: Created artifact with ID={new_artifact.id}, version={new_artifact.version}")
+
         
         print(f"DEBUG FEEDBACK: Created requirement model {new_artifact.id}, version: {new_artifact.version}, thread_id: {new_artifact.thread_id}")
         

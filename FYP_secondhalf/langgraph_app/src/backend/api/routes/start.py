@@ -337,7 +337,6 @@ async def stream_graph(request: Request, thread_id: str):
 
     async def event_generator():
         try:
-            # First, send a connection test
             print("=== STARTING EVENT GENERATOR ===")
             
             # Send initial ping to test connection
@@ -363,14 +362,27 @@ async def stream_graph(request: Request, thread_id: str):
             elif run_data["type"] == "routing_choice":
                 event_type = "resume_routing"
                 user_choice = run_data.get("user_choice")
+                print(f"DEBUG: ===== ROUTING CHOICE FLOW =====")
                 print(f"DEBUG: Resuming with routing choice: {user_choice}")
-                
+
+                # Check state BEFORE updating
+                pre_routing_state = await graph.aget_state(config)
+                print(f"DEBUG: BEFORE routing - state.next = {pre_routing_state.next}")
+
                 updated_values = {
                     "next_routing_node": user_choice,
                     "human_request": user_choice
                 }
+                print(f"DEBUG: Updating state with: {updated_values}")
                 await graph.aupdate_state(config, updated_values)
+
+                # Check state AFTER updating
+                post_routing_state = await graph.aget_state(config)
+                print(f"DEBUG: AFTER routing - state.next = {post_routing_state.next}")
+                print(f"DEBUG: AFTER routing - next_routing_node = {post_routing_state.values.get('next_routing_node', 'None')}")
+
                 input_state = None
+                print(f"DEBUG: Set input_state = None to continue from checkpoint")
                 
             elif run_data["type"] == "artifact_feedback":
                 event_type = "resume_artifact_feedback"
@@ -386,8 +398,13 @@ async def stream_graph(request: Request, thread_id: str):
                 print(f"DEBUG: artifact_feedback={artifact_feedback}")
                 
                 if artifact_action == "accept":
+                    print(f"DEBUG: ===== ARTIFACT ACCEPTANCE FLOW =====")
                     print(f"DEBUG: Artifact {artifact_id} accepted, continuing workflow")
-                    
+
+                    # Check state BEFORE updating
+                    pre_accept_state = await graph.aget_state(config)
+                    print(f"DEBUG: BEFORE acceptance - state.next = {pre_accept_state.next}")
+
                     # Send acceptance confirmation to frontend
                     acceptance_payload = json.dumps({
                         "chat_type": "conversation",
@@ -398,17 +415,55 @@ async def stream_graph(request: Request, thread_id: str):
                         "timestamp": datetime.now(timezone.utc).isoformat()
                     })
                     yield acceptance_payload
-                    
-                    # Clear ALL feedback-related state and continue workflow
+
+                    # Clear ALL feedback-related state and set continuation flag
+                    print(f"DEBUG: Updating state to clear feedback flags and set continuation flag...")
                     await graph.aupdate_state(config, {
                         "paused_for_feedback": False,
                         "artifact_feedback_id": None,
                         "artifact_feedback_action": None,
-                        "artifact_feedback_text": None
+                        "artifact_feedback_text": None,
+                        "continuing_after_feedback": True  # NEW: Flag to indicate continuation
                     })
-                    print(f"DEBUG: Resuming normal workflow after artifact acceptance")
 
-                    input_state = None 
+                    # Check state AFTER updating
+                    post_accept_state = await graph.aget_state(config)
+                    print(f"DEBUG: AFTER state update - state.next = {post_accept_state.next}")
+                    print(f"DEBUG: AFTER state update - continuing_after_feedback = {post_accept_state.values.get('continuing_after_feedback', False)}")
+
+                    # CRITICAL: Check if artifact is from revise_req_specs and graph is at interrupt point
+                    is_from_revise_req_specs = artifact_id.startswith("software_requirement_specs_")
+                    is_at_interrupt = post_accept_state.next and 'handle_routing_decision' in post_accept_state.next
+
+                    print(f"DEBUG: Artifact from revise_req_specs? {is_from_revise_req_specs}")
+                    print(f"DEBUG: Graph at interrupt point? {is_at_interrupt}")
+
+                    if is_from_revise_req_specs and is_at_interrupt:
+                        print(f"DEBUG: Graph is ALREADY at interrupt point - sending interrupt notification")
+                        print(f"DEBUG: NOT calling astream - waiting for user routing choice")
+
+                        # Send interrupt notification to frontend
+                        interrupt_payload = json.dumps({
+                            "chat_type": "interrupt",
+                            "status": "waiting_for_user_input",
+                            "message": "Please choose the next action: classify_user_requirements, write_system_requirement, build_requirement_model, write_req_specs, revise_req_specs, or no",
+                            "thread_id": thread_id,
+                            "timestamp": datetime.now(timezone.utc).isoformat()
+                        })
+                        print(f"DEBUG: Sending interrupt payload to frontend: {interrupt_payload}")
+                        yield interrupt_payload
+                        print(f"DEBUG: Interrupt payload sent successfully")
+
+                        # Keep thread alive for routing choice
+                        should_cleanup_thread = False
+                        print(f"DEBUG: Exiting event_generator, waiting for routing choice")
+                        return  # Exit without streaming - graph is already interrupted
+                    else:
+                        print(f"DEBUG: Artifact not from revise_req_specs or no interrupt - continuing normally")
+                        # CRITICAL: Set input_state to None to continue from checkpoint
+                        input_state = None  # This tells LangGraph to continue from current state
+                        print(f"DEBUG: Set input_state = None to continue from checkpoint")
+                        # Fall through to graph streaming section
                     
                 elif artifact_action == "feedback":
                     print(f"DEBUG: Processing feedback for artifact {artifact_id}")
@@ -607,6 +662,7 @@ async def stream_graph(request: Request, thread_id: str):
                     # Exit and wait for next user action (accept or more feedback)
                     return
 
+                # For artifact acceptance, we DON'T return here - let the graph continue
                 input_state = None
             else:
                 # Original feedback resume logic
@@ -626,13 +682,45 @@ async def stream_graph(request: Request, thread_id: str):
             print(f"Sending event type: {event_payload}")
             yield event_payload
             
-            # Regular graph streaming (only if we have input_state or are continuing after accept)
-            if input_state is not None or run_data["type"] == "start" or (run_data["type"] == "artifact_feedback" and run_data.get("artifact_action") == "accept"):
-                print(f"Starting graph streaming with input_state: {input_state}")
+            # Regular graph streaming - now includes continuation after artifact acceptance
+            # After artifact acceptance, we need to continue the graph to reach any pending routing interrupts
+            needs_graph_streaming = (
+                run_data["type"] == "start" or
+                run_data["type"] == "routing_choice" or
+                (run_data["type"] == "artifact_feedback" and run_data.get("artifact_action") == "accept") or
+                input_state is not None
+            )
+            
+            print(f"DEBUG: needs_graph_streaming={needs_graph_streaming}, run_data type={run_data['type']}")
+            
+            if needs_graph_streaming:
+                
+                print(f"Starting graph streaming for continuation after artifact acceptance")
+                
+                # For artifact acceptance continuation, we need to resume the graph 
+                # from where it was paused (None input means continue from current state)
+                stream_input = input_state
                 
                 # Use stream_mode="updates" to get state changes after each node
-                async for state_update in graph.astream(input_state, config, stream_mode="updates"):
+                print(f"DEBUG: ===== STARTING astream LOOP =====")
+                print(f"DEBUG: stream_input = {stream_input}")
+                print(f"DEBUG: config = {config}")
+                print(f"DEBUG: Checking state BEFORE astream...")
+                pre_stream_state = await graph.aget_state(config)
+                if pre_stream_state:
+                    print(f"DEBUG: Pre-stream state.next = {pre_stream_state.next}")
+                    print(f"DEBUG: Pre-stream state.values keys = {list(pre_stream_state.values.keys()) if pre_stream_state.values else 'None'}")
+                    if pre_stream_state.values:
+                        print(f"DEBUG: continuing_after_feedback = {pre_stream_state.values.get('continuing_after_feedback', False)}")
+                        print(f"DEBUG: paused_for_feedback = {pre_stream_state.values.get('paused_for_feedback', False)}")
+                        print(f"DEBUG: next_routing_node = {pre_stream_state.values.get('next_routing_node', 'None')}")
 
+                node_count = 0
+                async for state_update in graph.astream(stream_input, config, stream_mode="updates"):
+                    node_count += 1
+                    print(f"DEBUG: astream yielded update #{node_count}: {list(state_update.keys())}")
+
+                    # CHECK FOR INTERRUPTS FIRST - this should now work after artifact acceptance
                     if "__interrupt__" in state_update:
                         print(f"DEBUG: Graph interrupted at thread_id={thread_id}")
                     
@@ -664,7 +752,9 @@ async def stream_graph(request: Request, thread_id: str):
                         if current_state_check and current_state_check.values:
                             artifacts_in_state = current_state_check.values.get('artifacts', [])
                             conversations_in_state = current_state_check.values.get('conversations', [])
+                            continuing_after_feedback = current_state_check.values.get('continuing_after_feedback', False)
                             print(f"DEBUG: After {node_name}, state now has {len(artifacts_in_state)} artifacts and {len(conversations_in_state)} conversations")
+                            print(f"DEBUG: continuing_after_feedback flag: {continuing_after_feedback}")
                             
                             for i, art in enumerate(artifacts_in_state):
                                 print(f"  Artifact {i}: {art.id} (thread: {getattr(art, 'thread_id', 'NO_THREAD')})")
@@ -683,9 +773,19 @@ async def stream_graph(request: Request, thread_id: str):
                             })
                             yield routing_payload
 
-                        # Handle new conversations
-                        new_conversations = updates.get("conversations", [])
-                        print(f"DEBUG: Node {node_name} returned {len(new_conversations)} new conversations")
+                        # Handle new conversations - only from this node's update
+                        # IMPORTANT: Routing nodes return full state, which includes accumulated conversations
+                        # We need to skip those since routing nodes don't produce new conversations
+                        # (routing messages are sent via routing_decision payload instead)
+                        if node_name == "handle_routing_decision":
+                            new_conversations = []
+                            print(f"DEBUG: Skipping accumulated conversations for routing node '{node_name}'")
+                        else:
+                            new_conversations = updates.get("conversations", [])
+                            print(f"DEBUG: Node {node_name} returned {len(new_conversations)} new conversations from its update")
+
+                        # Only send conversations that were actually returned by this node
+                        # (not the accumulated state conversations)
                         for conversation in new_conversations:
                             conversation_payload = json.dumps({
                                 "chat_type": "conversation",
@@ -697,64 +797,79 @@ async def stream_graph(request: Request, thread_id: str):
                             })
                             yield conversation_payload
 
-                        # Handle new artifacts and check for feedback requirement
-                        new_artifacts = updates.get("artifacts", [])
-                        print(f"DEBUG: Node {node_name} returned {len(new_artifacts)} new artifacts")
-                        for artifact in new_artifacts:
-                            print(f"DEBUG: Processing artifact from node update: {artifact.id} (thread: {getattr(artifact, 'thread_id', 'NO_THREAD')})")
-                            
-                            # Serialize Pydantic model content properly
-                            content_data = None
-                            if artifact.content:
-                                if hasattr(artifact.content, 'model_dump'):  # Pydantic v2
-                                    content_data = artifact.content.model_dump()
-                                else:
-                                    content_data = str(artifact.content)  # Fallback for strings
-                            
-                            artifact_payload = json.dumps({
-                                "chat_type": "artifact",
-                                "artifact_id": artifact.id,
-                                "artifact_type": artifact.content_type.value,
-                                "agent": artifact.created_by.value if hasattr(artifact.created_by, 'value') else str(artifact.created_by),
-                                "content": content_data,  # Now properly serialized
-                                "node": node_name,
-                                "version": artifact.version,
-                                "timestamp": artifact.timestamp.isoformat(),  # Use artifact's own timestamp
-                                "status": "completed"
-                            })
-                            yield artifact_payload
+                        # MODIFIED: Handle new artifacts with continuation logic
+                        # Skip artifact processing for routing nodes
+                        if node_name == "handle_routing_decision":
+                            print(f"DEBUG: Skipping artifact processing for routing node '{node_name}'")
+                        else:
+                            new_artifacts = updates.get("artifacts", [])
+                            print(f"DEBUG: Node {node_name} returned {len(new_artifacts)} new artifacts")
+                            for artifact in new_artifacts:
+                                print(f"DEBUG: Processing artifact from node update: {artifact.id} (thread: {getattr(artifact, 'thread_id', 'NO_THREAD')})")
 
-                            # Always require feedback for ALL completed artifacts (original and revised)
-                            if artifact.id and artifact.content:
-                                print(f"DEBUG: Artifact {artifact.id} (version {artifact.version}) completed, requiring feedback")
-                                
-                                # CRITICAL DEBUG: Check state right before requiring feedback
-                                final_state_check = await graph.aget_state(config)
-                                if final_state_check and final_state_check.values:
-                                    final_artifacts = final_state_check.values.get('artifacts', [])
-                                    print(f"DEBUG: FINAL CHECK - State has {len(final_artifacts)} artifacts before requiring feedback")
-                                    for i, art in enumerate(final_artifacts):
-                                        print(f"  Final artifact {i}: {art.id} (thread: {getattr(art, 'thread_id', 'NO_THREAD')})")
-                                else:
-                                    print(f"DEBUG: CRITICAL ERROR - Final state check shows empty state before requiring feedback!")
-                                
-                                # Send artifact feedback requirement
-                                feedback_required_payload = json.dumps({
-                                    "chat_type": "artifact_feedback_required",
-                                    "status": "artifact_feedback_required", 
-                                    "pending_artifact_id": artifact.id,
-                                    "thread_id": thread_id,
-                                    "timestamp": datetime.now(timezone.utc).isoformat()
+                                # Serialize Pydantic model content properly
+                                content_data = None
+                                if artifact.content:
+                                    if hasattr(artifact.content, 'model_dump'):  # Pydantic v2
+                                        content_data = artifact.content.model_dump()
+                                    else:
+                                        content_data = str(artifact.content)  # Fallback for strings
+
+                                artifact_payload = json.dumps({
+                                    "chat_type": "artifact",
+                                    "artifact_id": artifact.id,
+                                    "artifact_type": artifact.content_type.value,
+                                    "agent": artifact.created_by.value if hasattr(artifact.created_by, 'value') else str(artifact.created_by),
+                                    "content": content_data,  # Now properly serialized
+                                    "node": node_name,
+                                    "version": artifact.version,
+                                    "timestamp": artifact.timestamp.isoformat(),  # Use artifact's own timestamp
+                                    "status": "completed"
                                 })
-                                yield feedback_required_payload
-                                
-                                # Store the current graph state to prevent race conditions
-                                await graph.aupdate_state(config, {"paused_for_feedback": True})
-                                
-                                # DON'T delete the thread - we need it for feedback
-                                should_cleanup_thread = False
-                                # Exit the generator - frontend will need to provide feedback
-                                return
+                                yield artifact_payload
+
+                                # CRITICAL CHANGE: Check if we're continuing after feedback acceptance
+                                current_state = await graph.aget_state(config)
+                                continuing_after_feedback = current_state.values.get("continuing_after_feedback", False)
+
+                                if artifact.id and artifact.content:
+                                    if not continuing_after_feedback:
+                                        # This is a NEW artifact - require feedback and exit
+                                        print(f"DEBUG: NEW artifact {artifact.id} (version {artifact.version}) completed, requiring feedback")
+
+                                        # CRITICAL DEBUG: Check state right before requiring feedback
+                                        final_state_check = await graph.aget_state(config)
+                                        if final_state_check and final_state_check.values:
+                                            final_artifacts = final_state_check.values.get('artifacts', [])
+                                            print(f"DEBUG: FINAL CHECK - State has {len(final_artifacts)} artifacts before requiring feedback")
+                                            for i, art in enumerate(final_artifacts):
+                                                print(f"  Final artifact {i}: {art.id} (thread: {getattr(art, 'thread_id', 'NO_THREAD')})")
+                                        else:
+                                            print(f"DEBUG: CRITICAL ERROR - Final state check shows empty state before requiring feedback!")
+
+                                        # Send artifact feedback requirement
+                                        feedback_required_payload = json.dumps({
+                                            "chat_type": "artifact_feedback_required",
+                                            "status": "artifact_feedback_required",
+                                            "pending_artifact_id": artifact.id,
+                                            "thread_id": thread_id,
+                                            "timestamp": datetime.now(timezone.utc).isoformat()
+                                        })
+                                        yield feedback_required_payload
+
+                                        # Store the current graph state to prevent race conditions
+                                        await graph.aupdate_state(config, {"paused_for_feedback": True})
+
+                                        # DON'T delete the thread - we need it for feedback
+                                        should_cleanup_thread = False
+                                        # Exit the generator - frontend will need to provide feedback
+                                        return
+                                    else:
+                                        # We're continuing after feedback acceptance - don't require feedback again
+                                        print(f"DEBUG: Continuing after feedback acceptance for artifact {artifact.id}, NOT requiring feedback again")
+                                        # Clear the continuation flag so future artifacts will require feedback
+                                        await graph.aupdate_state(config, {"continuing_after_feedback": False})
+                                        # Continue processing - let the graph flow to the routing interrupt
 
                         # Handle errors
                         new_errors = updates.get("errors", [])
@@ -766,8 +881,44 @@ async def stream_graph(request: Request, thread_id: str):
                                 "agent": node_to_agent_map.get(node_name, "Assistant")
                             })
                             yield error_payload
-                
 
+                # # Check if graph is interrupted (not actually completed)
+                # print(f"DEBUG: ===== ASTREAM LOOP COMPLETED =====")
+                # print(f"DEBUG: Total nodes processed in loop: {node_count}")
+                # print(f"DEBUG: Checking final state to detect interrupt...")
+                # final_state = await graph.aget_state(config)
+
+                # print(f"DEBUG: final_state type: {type(final_state)}")
+                # print(f"DEBUG: final_state.next: {final_state.next}")
+                # print(f"DEBUG: final_state.values keys: {list(final_state.values.keys()) if final_state.values else 'None'}")
+
+                # if final_state.next:  # If there are pending next nodes, we're interrupted
+                #     print(f"DEBUG: ✓ INTERRUPT DETECTED! Next nodes to execute: {final_state.next}")
+                #     print(f"DEBUG: Graph is waiting at an interrupt point, not completed!")
+                #     interrupt_payload = json.dumps({
+                #         "chat_type": "interrupt",
+                #         "status": "waiting_for_user_input",
+                #         "message": "Please choose the next action: ...",
+                #         "thread_id": thread_id,
+                #         "timestamp": datetime.now(timezone.utc).isoformat()
+                #     })
+                #     yield interrupt_payload
+                #     should_cleanup_thread = False
+                #     print(f"DEBUG: Returning early from event_generator due to interrupt")
+                #     return  # Don't send completion
+                # else:
+                #     print(f"DEBUG: ✗ NO INTERRUPT - final_state.next is empty/None")
+                #     print(f"DEBUG: Graph has completed normally, sending completion message")
+
+                # Final completion message - use "finished" to distinguish from artifact "completed"
+                print(f"DEBUG: Sending 'finished' status for thread {thread_id}")
+                completion_payload = json.dumps({
+                    "status": "finished",
+                    "thread_id": thread_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                })
+                yield completion_payload
+                print(f"DEBUG: 'finished' status sent successfully")
 
         except asyncio.CancelledError:
             print(f"Stream cancelled for thread {thread_id}")

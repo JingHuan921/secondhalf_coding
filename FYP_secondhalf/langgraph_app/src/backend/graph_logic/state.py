@@ -119,37 +119,6 @@ class GraphResponse(BaseModel):
 def add_artifacts(existing: List[Artifact], new: List[Artifact]) -> List[Artifact]:
     """Add new artifacts to existing ones, avoiding duplicates and handling timezone-aware/naive datetimes"""
     
-    def normalize_timestamp(timestamp):
-        """Convert timestamp to timezone-aware datetime for consistent comparison"""
-        if timestamp is None:
-            return datetime.now(timezone.utc)
-        
-        if isinstance(timestamp, str):
-            # Parse string timestamp
-            try:
-                # Try parsing with timezone info first
-                if timestamp.endswith('Z'):
-                    timestamp = timestamp[:-1] + '+00:00'
-                dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
-                
-                # If it's naive, make it UTC
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                return dt
-            except ValueError:
-                # Fallback to current time if parsing fails
-                return datetime.now(timezone.utc)
-        
-        elif isinstance(timestamp, datetime):
-            # If it's naive, assume UTC
-            if timestamp.tzinfo is None:
-                return timestamp.replace(tzinfo=timezone.utc)
-            return timestamp
-        
-        else:
-            # Fallback for any other type
-            return datetime.now(timezone.utc)
-    
     # Create a set of existing artifact IDs for quick lookup
     existing_ids = {artifact.id for artifact in existing}
     
@@ -162,7 +131,7 @@ def add_artifacts(existing: List[Artifact], new: List[Artifact]) -> List[Artifac
     
     # Sort by normalized timestamp (newest first)
     try:
-        result = sorted(result, key=lambda a: normalize_timestamp(a.timestamp), reverse=True)
+        result = sorted(result, key=lambda a: a.timestamp, reverse=True)
     except Exception as e:
         print(f"Warning: Error sorting artifacts by timestamp: {e}")
         # If sorting fails, just return unsorted result
@@ -383,6 +352,8 @@ def create_artifact(
         content_type=artifact_type,
         created_by=agent,
         content=content,
+        version=version,
+        thread_id=thread_id,
     )
 
 def create_conversation(

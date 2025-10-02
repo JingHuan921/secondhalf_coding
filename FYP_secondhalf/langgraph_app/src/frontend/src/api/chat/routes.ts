@@ -305,11 +305,15 @@ function streamAssistantResponseWithState(
       // Handle interrupt
       if (data.chat_type === "interrupt") {
         console.log("Graph interrupted, waiting for user input");
+        console.log("Interrupt message:", data.message);
         updateState({
           isInterrupted: true,
           isStreaming: false,
           interruptMessage: data.message || "Please choose the next action",
-          availableChoices: ROUTING_CHOICES
+          availableChoices: ROUTING_CHOICES,
+          // IMPORTANT: Clear artifact feedback state when showing routing choice
+          requiresArtifactFeedback: false,
+          pendingFeedbackArtifactId: undefined
         });
         eventSource.close(); // Close the stream, will be resumed after user choice
         return;
@@ -614,11 +618,12 @@ async function resumeStream(
 async function sendRoutingChoice(
   threadId: string,
   userChoice: string,
-  onStateUpdate: (state: ConversationState) => void
+  onStateUpdate: (state: ConversationState) => void,
+  currentState?: ConversationState
 ) {
   try {
     console.log("Sending routing choice:", { threadId, userChoice });
-    
+
     // Send the routing choice to your existing resume endpoint
     const resumeRes = await fetch("http://localhost:8000/graph/stream/resume", {
       method: "POST",
@@ -638,10 +643,18 @@ async function sendRoutingChoice(
 
     const resumeData = await resumeRes.json();
     console.log("Resume response:", resumeData);
-    
-    // Clear interrupt state and restart streaming
+
+    // Clear interrupt state but PRESERVE artifacts and messages
     // Update state first
-    onStateUpdate({ 
+    const updatedState = currentState ? {
+      ...currentState,
+      isStreaming: true,
+      isInterrupted: false,
+      interruptMessage: undefined,
+      availableChoices: undefined,
+      requiresArtifactFeedback: false,
+      currentMessage: ""
+    } : {
       currentMessage: "",
       isStreaming: true,
       chatType: null,
@@ -654,11 +667,15 @@ async function sendRoutingChoice(
       interruptMessage: undefined,
       availableChoices: undefined,
       requiresArtifactFeedback: false,
-      messages: [] // Keep existing messages - don't clear them
-    });
-    
-    // Then start streaming again
-    streamAssistantResponse(threadId, onStateUpdate);
+      messages: []
+    };
+
+    onStateUpdate(updatedState);
+
+    // Then start streaming again WITH PRESERVED STATE
+    setTimeout(() => {
+      streamAssistantResponseWithState(threadId, onStateUpdate, updatedState);
+    }, 500);
     
   } catch (error) {
     console.error("Error in sendRoutingChoice:", error);
@@ -719,20 +736,23 @@ async function sendArtifactFeedback(
     console.log("Artifact feedback response:", resumeData);
     
     // Clear only artifact feedback specific states, keep everything else
-    if (currentState) {
-      onStateUpdate({
-        ...currentState,
-        requiresArtifactFeedback: false,
-        pendingFeedbackArtifactId: undefined,
-        isStreaming: true,
-        currentMessage: ""
-      });
+    // IMPORTANT: Don't clear interrupt state here - let the stream handle it
+    const updatedState = currentState ? {
+      ...currentState,
+      requiresArtifactFeedback: false,
+      pendingFeedbackArtifactId: undefined,
+      isStreaming: true,
+      currentMessage: ""
+    } : undefined;
+
+    if (updatedState) {
+      onStateUpdate(updatedState);
     }
-    
+
     // Start streaming again with preserved state
     // Add a small delay to prevent immediate reconnection issues
     setTimeout(() => {
-      streamAssistantResponseWithState(threadId, onStateUpdate, currentState);
+      streamAssistantResponseWithState(threadId, onStateUpdate, updatedState);
     }, 500);
     
   } catch (error) {
