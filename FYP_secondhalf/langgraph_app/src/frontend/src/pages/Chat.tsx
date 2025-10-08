@@ -1,6 +1,6 @@
 // Chat.tsx - COMPLETE FILE WITH ARTIFACT ACCEPT/FEEDBACK FEATURE
 import { useState, useMemo, useEffect } from "react";
-import { sendUserPrompt, resumeStream, sendRoutingChoice, sendArtifactFeedback, ROUTING_CHOICES, type ConversationState, type ConversationMessage, type ArtifactInfo } from "../api/chat/routes";
+import { sendUserPrompt, resumeStream, sendRoutingChoice, sendArtifactFeedback, exportArtifactAsPDF, ROUTING_CHOICES, type ConversationState, type ConversationMessage, type ArtifactInfo } from "../api/chat/routes";
 import {
   PromptInput,
   PromptInputButton,
@@ -110,10 +110,29 @@ const formatTimestamp = (timestamp: string) => {
 };
 
 // Artifact Content Viewer Component
-const ArtifactContentViewer = ({ artifact, onClose }: { artifact: ArtifactInfo & { content?: any }; onClose: () => void }) => {
+const ArtifactContentViewer = ({ artifact, onClose, threadId }: { artifact: ArtifactInfo & { content?: any }; onClose: () => void; threadId: string | null }) => {
   console.log("Viewing artifact:", artifact);
   console.log("Artifact content:", artifact.content);
   console.log("Artifact type:", artifact.type);
+
+  const [isExporting, setIsExporting] = useState(false);
+
+  const handleExport = async () => {
+    if (!threadId) {
+      console.error("No thread ID available for export");
+      return;
+    }
+
+    setIsExporting(true);
+    try {
+      await exportArtifactAsPDF(threadId, artifact.id);
+    } catch (error) {
+      console.error("Failed to export PDF:", error);
+      alert("Failed to export PDF. Please try again.");
+    } finally {
+      setIsExporting(false);
+    }
+  };
   
   const renderContent = () => {
     if (!artifact.content) {
@@ -329,7 +348,7 @@ const ArtifactContentViewer = ({ artifact, onClose }: { artifact: ArtifactInfo &
             {getArtifactInfo(artifact.type).icon}
             <h2 className="text-lg font-semibold">{getArtifactInfo(artifact.type).label}</h2>
           </div>
-          <Button variant="ghost" size="sm" onClick={onClose} className="text-white hover:text-gray-200">
+          <Button variant="ghost" size="sm" onClick={onClose} className="text-black hover:text-gray-200">
             ✕
           </Button>
         </div>
@@ -342,9 +361,14 @@ const ArtifactContentViewer = ({ artifact, onClose }: { artifact: ArtifactInfo &
           <div className="text-sm text-white">
             Created by {artifact.agent} • {formatTimestamp(artifact.timestamp)}
           </div>
-          <Button variant="outline" size="sm">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExport}
+            disabled={isExporting || !threadId}
+          >
             <DownloadIcon className="h-3 w-3 mr-1" />
-            Export
+            {isExporting ? "Exporting..." : "Export as PDF"}
           </Button>
         </div>
       </div>
@@ -407,7 +431,7 @@ const ArtifactCard = ({
           <div className="flex space-x-2">
             <Button 
               size="sm" 
-              className="h-7 text-xs flex-1 bg-gray-100 hover:bg-gray-200 text-white border border-gray-300 font-medium"
+              className="h-7 text-xs flex-1 bg-white hover:bg-gray-100 text-black border border-gray-300 font-medium"
             >
               <EyeIcon className="h-3 w-3 mr-1" />
               {hasDiagram ? "View Diagram & Code" : "View Content"}
@@ -736,7 +760,7 @@ const InputDemo = () => {
               {groupedMessages.map((group, groupIdx) => (
                 <Message from={group.role} key={groupIdx}>
                   <MessageContent>
-                    <div className="font-bold text-sm text-gray-600 mb-2">
+                    <div className={`font-bold text-sm mb-2 ${group.agent === "You" ? "text-white" : "text-gray-600"}`}>
                       {group.agent}
                     </div>
                     <div className="space-y-2">
@@ -794,16 +818,17 @@ const InputDemo = () => {
                   </PromptInput>
                   <div className="flex gap-2 mt-2 w-full">
                     <Button 
+                      variant="outline" 
                       onClick={handleArtifactFeedbackSubmit} 
                       disabled={!artifactFeedbackText.trim()}
-                      className="flex-1"
+                      className="flex-1 text-black bg-white hover:bg-gray-100 border border-gray-300"
                     >
                       Send Feedback
                     </Button>
                     <Button 
                       variant="outline" 
                       onClick={handleArtifactFeedbackCancel}
-                      className="flex-1"
+                      className="flex-1 text-black bg-white hover:bg-gray-100 border border-gray-300"
                     >
                       Cancel
                     </Button>
@@ -831,7 +856,7 @@ const InputDemo = () => {
                       console.log("pendingFeedbackArtifactId from state:", conversationState?.pendingFeedbackArtifactId);
                       handleArtifactAccept(conversationState?.pendingFeedbackArtifactId || '');
                     }}
-                    className="flex-1 bg-green-600 hover:bg-green-700 text-white"
+                    className="flex-1 bg-black hover:bg-gray-800 text-black"
                   >
                     <CheckIcon className="h-4 w-4 mr-2" />
                     Accept
@@ -842,7 +867,7 @@ const InputDemo = () => {
                       console.log("pendingFeedbackArtifactId from state:", conversationState?.pendingFeedbackArtifactId);
                       handleArtifactFeedbackStart(conversationState?.pendingFeedbackArtifactId || '');
                     }}
-                    className="flex-1 bg-orange-600 hover:bg-orange-700 text-white"
+                    className="flex-1 bg-orange-600 hover:bg-orange-700 text-black"
                   >
                     <MessageSquareIcon className="h-4 w-4 mr-2" />
                     Provide Feedback
@@ -857,14 +882,14 @@ const InputDemo = () => {
             <div className="flex justify-center items-center">
               <div className="bg-grey-100 rounded-lg p-6 w-full flex flex-col items-center max-w-lg">
                 <div className="text-center mb-4">
-                  <p className="text-xl mb-4">Choose the next action:</p>
+                  <p className="text-xl mb-4 text-black">Choose the next action:</p>
                 </div>
                 <div className="grid grid-cols-1 gap-2 w-full">
                   {conversationState.availableChoices?.map((choice) => (
                     <Button
                       key={choice.value}
                       onClick={() => handleRoutingChoice(choice.value)}
-                      className="w-full text-left justify-start bg-gray-100 hover:bg-gray-200 text-white border border-gray-300 font-medium"
+                      className="w-full text-left justify-start bg-gray-100 hover:bg-gray-200 text-black border border-gray-300 font-medium"
                     >
                       {choice.label}
                     </Button>
@@ -996,9 +1021,10 @@ const InputDemo = () => {
 
       {/* Artifact Content Viewer Modal */}
       {selectedArtifact && (
-        <ArtifactContentViewer 
-          artifact={selectedArtifact} 
-          onClose={() => setSelectedArtifact(null)} 
+        <ArtifactContentViewer
+          artifact={selectedArtifact}
+          onClose={() => setSelectedArtifact(null)}
+          threadId={conversationState?.threadId || null}
         />
       )}
     </div>

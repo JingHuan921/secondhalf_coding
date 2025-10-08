@@ -769,13 +769,61 @@ async function sendArtifactFeedback(
   }
 }
 
-export { 
-  sendUserPrompt, 
-  resumeStream, 
+/**
+ * Export an artifact as PDF
+ * @param threadId - The thread ID containing the artifact
+ * @param artifactId - The artifact ID to export
+ */
+async function exportArtifactAsPDF(threadId: string, artifactId: string): Promise<void> {
+  try {
+    console.log("Exporting artifact as PDF:", { threadId, artifactId });
+
+    const response = await fetch("http://localhost:8000/graph/export_pdf", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        thread_id: threadId,
+        artifact_id: artifactId,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to export PDF: ${response.status} ${response.statusText}\n${errorText}`);
+    }
+
+    // Get the PDF blob
+    const blob = await response.blob();
+
+    // Create a download link
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${artifactId}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+
+    // Cleanup
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+
+    console.log("PDF export successful");
+  } catch (error) {
+    console.error("Error exporting artifact as PDF:", error);
+    throw error;
+  }
+}
+
+export {
+  sendUserPrompt,
+  resumeStream,
   sendRoutingChoice,
   sendArtifactFeedback,
+  exportArtifactAsPDF,
   ROUTING_CHOICES,
-  type ConversationState, 
-  type ConversationMessage, 
-  type ArtifactInfo 
+  type ConversationState,
+  type ConversationMessage,
+  type ArtifactInfo
 };
