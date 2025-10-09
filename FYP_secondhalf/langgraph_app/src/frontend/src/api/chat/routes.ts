@@ -549,8 +549,7 @@ function streamAssistantResponseWithState(
       }
     };
     return eventSource;
-  }
-
+}
 
 // Update the original streamAssistantResponse to use the new function
 function streamAssistantResponse(
@@ -614,7 +613,7 @@ async function resumeStream(
   }
 }
 
-// Function to handle routing choice and resume graph
+// Function to send routing choice from user input and resume graph
 async function sendRoutingChoice(
   threadId: string,
   userChoice: string,
@@ -699,9 +698,7 @@ async function sendRoutingChoice(
   }
 }
 
-// NEW: Function to send artifact feedback (accept/feedback)
-// Update your sendArtifactFeedback function in routes.ts to prevent infinite loops:
-
+// NEW: Function to send artifact feedback (accept/feedback) from user input 
 async function sendArtifactFeedback(
   threadId: string,
   artifactId: string,

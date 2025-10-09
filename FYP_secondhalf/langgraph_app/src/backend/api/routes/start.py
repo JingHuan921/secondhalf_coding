@@ -40,6 +40,11 @@ from backend.graph_logic.state import (
 )
 from backend.utils.main_utils import load_prompts
 from backend.path_global_file import OUTPUT_DIR
+from backend.db.db_utils import (
+    save_artifact_to_db,
+    save_conversation_to_db,
+    create_indexes
+)
 
 # --- LangGraph / LangChain ---
 from langgraph.graph import StateGraph, Graph
@@ -338,16 +343,19 @@ async def stream_graph(request: Request, thread_id: str):
     async def event_generator():
         try:
             print("=== STARTING EVENT GENERATOR ===")
-            
+
+            # Create indexes for this thread (idempotent operation)
+            create_indexes(thread_id)
+
             # Send initial ping to test connection
             initial_payload = json.dumps({
-                "status": "connected", 
+                "status": "connected",
                 "thread_id": thread_id,
                 "timestamp": datetime.now(timezone.utc).isoformat()
             })
             print(f"Sending initial payload: {initial_payload}")
             yield initial_payload
-            
+
             # Small delay to ensure connection is established
             await asyncio.sleep(0.1)
            
@@ -580,15 +588,19 @@ async def stream_graph(request: Request, thread_id: str):
                         if "conversations" in feedback_result and feedback_result["conversations"]:
                             print(f"DEBUG: Sending {len(feedback_result['conversations'])} conversation updates")
                             for conv in feedback_result["conversations"]:
-                                conv_payload = json.dumps({
+                                conv_payload_dict = {
                                     "chat_type": "conversation",
                                     "content": conv.content,
                                     "node": "artifact_feedback_processor",
                                     "agent": conv.agent.value if hasattr(conv.agent, 'value') else str(conv.agent),
                                     "artifact_id": getattr(conv, 'artifact_id', None),
                                     "timestamp": conv.timestamp.isoformat() if hasattr(conv, 'timestamp') else datetime.now(timezone.utc).isoformat()
-                                })
+                                }
+                                conv_payload = json.dumps(conv_payload_dict)
                                 yield conv_payload
+
+                                # Save conversation to MongoDB
+                                save_conversation_to_db(thread_id, conv_payload_dict)
                         else:
                             print("DEBUG: No conversations in feedback result")
                         
@@ -597,7 +609,7 @@ async def stream_graph(request: Request, thread_id: str):
                             print(f"DEBUG: Sending {len(feedback_result['artifacts'])} revised artifacts")
                             for art in feedback_result["artifacts"]:
                                 print(f"DEBUG STREAM: Sending revised artifact {art.id}, version: {art.version}")
-                                
+
                                 # Serialize content
                                 content_data = None
                                 if art.content:
@@ -605,9 +617,9 @@ async def stream_graph(request: Request, thread_id: str):
                                         content_data = art.content.model_dump()
                                     else:
                                         content_data = str(art.content)
-                                
+
                                 # Send the revised artifact
-                                art_payload = json.dumps({
+                                art_payload_dict = {
                                     "chat_type": "artifact",
                                     "artifact_id": art.id,
                                     "artifact_type": art.content_type.value if hasattr(art.content_type, 'value') else str(art.content_type),
@@ -617,8 +629,12 @@ async def stream_graph(request: Request, thread_id: str):
                                     "version": art.version,
                                     "timestamp": art.timestamp.isoformat() if hasattr(art.timestamp, 'isoformat') else str(art.timestamp),
                                     "status": "completed"
-                                })
+                                }
+                                art_payload = json.dumps(art_payload_dict)
                                 yield art_payload
+
+                                # Save artifact to MongoDB
+                                save_artifact_to_db(thread_id, art_payload_dict)
                                 
                                 # Immediately require feedback for the revised artifact
                                 print(f"DEBUG: Requiring feedback for revised artifact {art.id}")
@@ -787,15 +803,19 @@ async def stream_graph(request: Request, thread_id: str):
                         # Only send conversations that were actually returned by this node
                         # (not the accumulated state conversations)
                         for conversation in new_conversations:
-                            conversation_payload = json.dumps({
+                            conversation_payload_dict = {
                                 "chat_type": "conversation",
                                 "content": conversation.content,
                                 "node": node_name,
                                 "agent": conversation.agent.value,
                                 "artifact_id": conversation.artifact_id,
                                 "timestamp": conversation.timestamp.isoformat()
-                            })
+                            }
+                            conversation_payload = json.dumps(conversation_payload_dict)
                             yield conversation_payload
+
+                            # Save conversation to MongoDB
+                            save_conversation_to_db(thread_id, conversation_payload_dict)
 
                         # MODIFIED: Handle new artifacts with continuation logic
                         # Skip artifact processing for routing nodes
@@ -815,7 +835,7 @@ async def stream_graph(request: Request, thread_id: str):
                                     else:
                                         content_data = str(artifact.content)  # Fallback for strings
 
-                                artifact_payload = json.dumps({
+                                artifact_payload_dict = {
                                     "chat_type": "artifact",
                                     "artifact_id": artifact.id,
                                     "artifact_type": artifact.content_type.value,
@@ -825,8 +845,12 @@ async def stream_graph(request: Request, thread_id: str):
                                     "version": artifact.version,
                                     "timestamp": artifact.timestamp.isoformat(),  # Use artifact's own timestamp
                                     "status": "completed"
-                                })
+                                }
+                                artifact_payload = json.dumps(artifact_payload_dict)
                                 yield artifact_payload
+
+                                # Save artifact to MongoDB
+                                save_artifact_to_db(thread_id, artifact_payload_dict)
 
                                 # CRITICAL CHANGE: Check if we're continuing after feedback acceptance
                                 current_state = await graph.aget_state(config)
