@@ -601,13 +601,19 @@ async def write_req_specs(state: ArtifactState, config: dict) -> ArtifactState:
         )
 
         return {
-            "artifacts": [artifact],  
-            "conversations": [conversation],  
+            "artifacts": [artifact],
+            "conversations": [conversation],
         }
-        
+
     except Exception as e:
+        import traceback
+        error_msg = f"write_req_specs failed: {str(e)}"
+        logger.error(error_msg)
+        logger.error(f"Full traceback: {traceback.format_exc()}")
+        print(f"ERROR: {error_msg}")
+        print(f"ERROR: Full traceback: {traceback.format_exc()}")
         return {
-            "errors": [f"Classification failed: {str(e)}"]
+            "errors": [error_msg]
         }
 
 async def verdict_to_revise_SRS(state: ArtifactState) -> str: 
@@ -713,12 +719,18 @@ async def revise_req_specs(state: ArtifactState, config: dict) -> ArtifactState:
             content=summary,
         )
         return {
-            "artifacts": [artifact], 
+            "artifacts": [artifact],
             "conversations": [conversation],
         }
-    except Exception as e: 
-        return{
-            "errors": [f"Classification failed: {str(e)}"]
+    except Exception as e:
+        import traceback
+        error_msg = f"revise_req_specs failed: {str(e)}"
+        logger.error(error_msg)
+        logger.error(f"Full traceback: {traceback.format_exc()}")
+        print(f"ERROR: {error_msg}")
+        print(f"ERROR: Full traceback: {traceback.format_exc()}")
+        return {
+            "errors": [error_msg]
         }
 
 async def handle_routing_decision(state: ArtifactState, config: dict) -> ArtifactState:

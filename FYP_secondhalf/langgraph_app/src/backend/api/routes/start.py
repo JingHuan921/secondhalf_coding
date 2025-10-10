@@ -344,8 +344,8 @@ async def stream_graph(request: Request, thread_id: str):
         try:
             print("=== STARTING EVENT GENERATOR ===")
 
-            # Create indexes for this thread (idempotent operation)
-            create_indexes(thread_id)
+            # Create indexes (idempotent operation, now database-wide)
+            create_indexes()
 
             # Send initial ping to test connection
             initial_payload = json.dumps({

@@ -37,7 +37,7 @@ def test_basic_operations():
 
     # Create indexes
     print("\n1. Creating indexes...")
-    create_indexes(test_thread_id)
+    create_indexes()
     print("✓ Indexes created")
 
     # Test artifact saving

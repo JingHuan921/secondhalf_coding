@@ -14,6 +14,9 @@ client = MongoClient(uri)
 
 SESSION_TO_THREAD_MAPPING = {}
 
+# Use a single database for all threads
+APP_DATABASE_NAME = "langgraph_app"
+
 def save_session_thread_mapping(session_id: str, thread_id: str):
     """Saves the link between a user's session and a LangGraph thread."""
     print(f"DATABASE: Mapping session '{session_id}' to thread '{thread_id}'")
@@ -21,22 +24,26 @@ def save_session_thread_mapping(session_id: str, thread_id: str):
 
 # the threads to and from DB are for interrutps!
 def save_threadID_to_db(session_id: str, thread_id: str) -> None:
-    db = client[session_id]
-    collection = db["thread_id"]
+    db = client[APP_DATABASE_NAME]
+    collection = db["thread_mappings"]
 
-    # Upsert by replacing any existing document
+    # Upsert by replacing any existing document for this session
     thread_schema = {
+        "_id": session_id,
         "thread_id": str(thread_id),
+        "updated_at": datetime.now(timezone.utc).isoformat()
     }
 
-    collection.replace_one({"_id": "thread"}, thread_schema, upsert=True)
+    collection.replace_one({"_id": session_id}, thread_schema, upsert=True)
 
 
 # ==================== MongoDB Conversation & Artifact Storage ====================
 
 def get_thread_db(thread_id: str):
-    """Get the database for a specific thread."""
-    return client[f"thread_{thread_id}"]
+    """Get the database for all app data (single database approach)."""
+    # Note: thread_id is kept as parameter for backwards compatibility
+    # but we now use a single database with thread_id as a document field
+    return client[APP_DATABASE_NAME]
 
 
 def save_artifact_to_db(thread_id: str, artifact_data: Dict[str, Any]) -> bool:
@@ -51,12 +58,14 @@ def save_artifact_to_db(thread_id: str, artifact_data: Dict[str, Any]) -> bool:
         bool: True if saved successfully, False otherwise
     """
     try:
-        db = get_thread_db(thread_id)
+        db = client[APP_DATABASE_NAME]
         collection = db["artifacts"]
 
         # Prepare the document for MongoDB
+        # Use composite _id with thread_id to ensure uniqueness across threads
+        composite_id = f"{thread_id}_{artifact_data.get('artifact_id')}"
         artifact_doc = {
-            "_id": artifact_data.get("artifact_id"),  # Use artifact_id as _id for uniqueness
+            "_id": composite_id,
             "artifact_id": artifact_data.get("artifact_id"),
             "artifact_type": artifact_data.get("artifact_type"),
             "agent": artifact_data.get("agent"),
@@ -74,7 +83,7 @@ def save_artifact_to_db(thread_id: str, artifact_data: Dict[str, Any]) -> bool:
 
         # Use upsert to handle versioning - newer versions will update the document
         collection.replace_one(
-            {"_id": artifact_doc["_id"]},
+            {"_id": composite_id},
             artifact_doc,
             upsert=True
         )
@@ -99,7 +108,7 @@ def save_conversation_to_db(thread_id: str, conversation_data: Dict[str, Any]) -
         bool: True if saved successfully, False otherwise
     """
     try:
-        db = get_thread_db(thread_id)
+        db = client[APP_DATABASE_NAME]
         collection = db["conversations"]
 
         # Prepare the document for MongoDB
@@ -136,7 +145,7 @@ def get_artifacts_from_db(thread_id: str, artifact_type: Optional[str] = None) -
         List of artifact documents sorted by timestamp (newest first)
     """
     try:
-        db = get_thread_db(thread_id)
+        db = client[APP_DATABASE_NAME]
         collection = db["artifacts"]
 
         query = {"thread_id": thread_id}
@@ -169,7 +178,7 @@ def get_conversations_from_db(thread_id: str) -> List[Dict[str, Any]]:
         List of conversation documents sorted by timestamp (oldest first)
     """
     try:
-        db = get_thread_db(thread_id)
+        db = client[APP_DATABASE_NAME]
         collection = db["conversations"]
 
         # Sort by timestamp ascending (oldest first) to maintain chronological order
@@ -199,7 +208,7 @@ def get_latest_artifact_version(thread_id: str, artifact_type: str) -> Optional[
         The latest artifact document or None if not found
     """
     try:
-        db = get_thread_db(thread_id)
+        db = client[APP_DATABASE_NAME]
         collection = db["artifacts"]
 
         # Find all artifacts of this type and sort by version
@@ -230,11 +239,11 @@ def delete_thread_data(thread_id: str) -> bool:
         bool: True if deleted successfully, False otherwise
     """
     try:
-        db = get_thread_db(thread_id)
+        db = client[APP_DATABASE_NAME]
 
-        # Drop all collections for this thread
-        db["artifacts"].drop()
-        db["conversations"].drop()
+        # Delete all documents for this thread from all collections
+        db["artifacts"].delete_many({"thread_id": thread_id})
+        db["conversations"].delete_many({"thread_id": thread_id})
 
         logger.info(f"Deleted all data for thread {thread_id}")
         return True
@@ -244,27 +253,30 @@ def delete_thread_data(thread_id: str) -> bool:
         return False
 
 
-def create_indexes(thread_id: str):
+def create_indexes():
     """
     Create indexes for better query performance.
-
-    Args:
-        thread_id: The thread ID to create indexes for
+    This should be called once at application startup.
     """
     try:
-        db = get_thread_db(thread_id)
+        db = client[APP_DATABASE_NAME]
 
         # Create indexes for artifacts
         artifacts_collection = db["artifacts"]
+        artifacts_collection.create_index([("thread_id", ASCENDING), ("timestamp", -1)])
+        artifacts_collection.create_index([("thread_id", ASCENDING), ("artifact_type", ASCENDING)])
         artifacts_collection.create_index([("timestamp", -1)])
-        artifacts_collection.create_index([("artifact_type", ASCENDING)])
 
         # Create indexes for conversations
         conversations_collection = db["conversations"]
-        conversations_collection.create_index([("timestamp", ASCENDING)])
+        conversations_collection.create_index([("thread_id", ASCENDING), ("timestamp", ASCENDING)])
         conversations_collection.create_index([("artifact_id", ASCENDING)])
 
-        logger.info(f"Created indexes for thread {thread_id}")
+        # Create index for thread_mappings
+        thread_mappings_collection = db["thread_mappings"]
+        thread_mappings_collection.create_index([("thread_id", ASCENDING)])
+
+        logger.info(f"Created indexes for {APP_DATABASE_NAME} database")
 
     except Exception as e:
         logger.error(f"Failed to create indexes: {str(e)}")
